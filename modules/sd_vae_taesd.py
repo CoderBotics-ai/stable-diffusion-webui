@@ -13,43 +13,74 @@ from modules import devices, paths_internal, shared
 sd_vae_taesd_models = {}
 
 
-def conv(n_in, n_out, **kwargs):
-    return nn.Conv2d(n_in, n_out, 3, padding=1, **kwargs)
+def conv(n_in: int, n_out: int, **kwargs) -> nn.Conv2d:
+    return nn.Conv2d(n_in, n_out, kernel_size=3, padding=1, **kwargs)
 
 
 class Clamp(nn.Module):
     @staticmethod
-    def forward(x):
+    def forward(x: torch.Tensor) -> torch.Tensor:
         return torch.tanh(x / 3) * 3
 
 
 class Block(nn.Module):
-    def __init__(self, n_in, n_out):
+    def __init__(self, n_in: int, n_out: int):
         super().__init__()
-        self.conv = nn.Sequential(conv(n_in, n_out), nn.ReLU(), conv(n_out, n_out), nn.ReLU(), conv(n_out, n_out))
-        self.skip = nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
+        self.conv = nn.Sequential(
+            conv(n_in, n_out), 
+            nn.ReLU(), 
+            conv(n_out, n_out), 
+            nn.ReLU(), 
+            conv(n_out, n_out)
+        )
+        self.skip = nn.Conv2d(n_in, n_out, kernel_size=1, bias=False) if n_in != n_out else nn.Identity()
         self.fuse = nn.ReLU()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.fuse(self.conv(x) + self.skip(x))
 
 
-def decoder(latent_channels=4):
+def decoder(latent_channels: int = 4) -> nn.Sequential:
     return nn.Sequential(
-        Clamp(), conv(latent_channels, 64), nn.ReLU(),
-        Block(64, 64), Block(64, 64), Block(64, 64), nn.Upsample(scale_factor=2), conv(64, 64, bias=False),
-        Block(64, 64), Block(64, 64), Block(64, 64), nn.Upsample(scale_factor=2), conv(64, 64, bias=False),
-        Block(64, 64), Block(64, 64), Block(64, 64), nn.Upsample(scale_factor=2), conv(64, 64, bias=False),
-        Block(64, 64), conv(64, 3),
+        Clamp(), 
+        conv(latent_channels, 64), 
+        nn.ReLU(),
+        Block(64, 64), 
+        Block(64, 64), 
+        Block(64, 64), 
+        nn.Upsample(scale_factor=2), 
+        conv(64, 64, bias=False),
+        Block(64, 64), 
+        Block(64, 64), 
+        Block(64, 64), 
+        nn.Upsample(scale_factor=2), 
+        conv(64, 64, bias=False),
+        Block(64, 64), 
+        Block(64, 64), 
+        Block(64, 64), 
+        nn.Upsample(scale_factor=2), 
+        conv(64, 64, bias=False),
+        Block(64, 64), 
+        conv(64, 3),
     )
 
 
-def encoder(latent_channels=4):
+def encoder(latent_channels: int = 4) -> nn.Sequential:
     return nn.Sequential(
-        conv(3, 64), Block(64, 64),
-        conv(64, 64, stride=2, bias=False), Block(64, 64), Block(64, 64), Block(64, 64),
-        conv(64, 64, stride=2, bias=False), Block(64, 64), Block(64, 64), Block(64, 64),
-        conv(64, 64, stride=2, bias=False), Block(64, 64), Block(64, 64), Block(64, 64),
+        conv(3, 64), 
+        Block(64, 64),
+        conv(64, 64, stride=2, bias=False), 
+        Block(64, 64), 
+        Block(64, 64), 
+        Block(64, 64),
+        conv(64, 64, stride=2, bias=False), 
+        Block(64, 64), 
+        Block(64, 64), 
+        Block(64, 64),
+        conv(64, 64, stride=2, bias=False), 
+        Block(64, 64), 
+        Block(64, 64), 
+        Block(64, 64),
         conv(64, latent_channels),
     )
 
@@ -58,7 +89,7 @@ class TAESDDecoder(nn.Module):
     latent_magnitude = 3
     latent_shift = 0.5
 
-    def __init__(self, decoder_path="taesd_decoder.pth", latent_channels=None):
+    def __init__(self, decoder_path: str = "taesd_decoder.pth", latent_channels: int = None):
         """Initialize pretrained TAESD on the given device from the given checkpoints."""
         super().__init__()
 
@@ -74,7 +105,7 @@ class TAESDEncoder(nn.Module):
     latent_magnitude = 3
     latent_shift = 0.5
 
-    def __init__(self, encoder_path="taesd_encoder.pth", latent_channels=None):
+    def __init__(self, encoder_path: str = "taesd_encoder.pth", latent_channels: int = None):
         """Initialize pretrained TAESD on the given device from the given checkpoints."""
         super().__init__()
 
@@ -86,7 +117,7 @@ class TAESDEncoder(nn.Module):
             torch.load(encoder_path, map_location='cpu' if devices.device.type != 'cuda' else None))
 
 
-def download_model(model_path, model_url):
+def download_model(model_path: str, model_url: str) -> None:
     if not os.path.exists(model_path):
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
@@ -94,7 +125,7 @@ def download_model(model_path, model_url):
         torch.hub.download_url_to_file(model_url, model_path)
 
 
-def decoder_model():
+def decoder_model() -> nn.Module:
     if shared.sd_model.is_sd3:
         model_name = "taesd3_decoder.pth"
     elif shared.sd_model.is_sdxl:
@@ -119,7 +150,7 @@ def decoder_model():
     return loaded_model.decoder
 
 
-def encoder_model():
+def encoder_model() -> nn.Module:
     if shared.sd_model.is_sd3:
         model_name = "taesd3_encoder.pth"
     elif shared.sd_model.is_sdxl:
