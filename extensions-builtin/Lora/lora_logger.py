@@ -13,7 +13,7 @@ class ColoredFormatter(logging.Formatter):
         "RESET": "\033[0m",  # RESET COLOR
     }
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         colored_record = copy.copy(record)
         levelname = colored_record.levelname
         seq = self.COLORS.get(levelname, self.COLORS["RESET"])
@@ -23,7 +23,6 @@ class ColoredFormatter(logging.Formatter):
 
 logger = logging.getLogger("lora")
 logger.propagate = False
-
 
 if not logger.handlers:
     handler = logging.StreamHandler(sys.stdout)
