@@ -1,4 +1,4 @@
-### This file contains impls for underlying related models (CLIP, T5, etc)
+### This file contains implementations for underlying related models (CLIP, T5, etc)
 
 import torch
 import math
@@ -12,20 +12,19 @@ from modules import sd_hijack
 ### Core/Utility
 #################################################################################################
 
-
 class AutocastLinear(nn.Linear):
     """Same as usual linear layer, but casts its weights to whatever the parameter type is.
 
     This is different from torch.autocast in a way that float16 layer processing float32 input
-    will return float16 with autocast on, and float32 with this. T5 seems to be fucked
+    will return float16 with autocast on, and float32 with this. T5 seems to be problematic
     if you do it in full float16 (returning almost all zeros in the final output).
     """
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.nn.functional.linear(x, self.weight.to(x.dtype), self.bias.to(x.dtype) if self.bias is not None else None)
 
 
-def attention(q, k, v, heads, mask=None):
+def attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int, mask: torch.Tensor = None) -> torch.Tensor:
     """Convenience wrapper around a basic attention operation"""
     b, _, dim_head = q.shape
     dim_head //= heads
@@ -35,8 +34,8 @@ def attention(q, k, v, heads, mask=None):
 
 
 class Mlp(nn.Module):
-    """ MLP as used in Vision Transformer, MLP-Mixer and related networks"""
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, bias=True, dtype=None, device=None):
+    """MLP as used in Vision Transformer, MLP-Mixer and related networks"""
+    def __init__(self, in_features: int, hidden_features: int = None, out_features: int = None, act_layer=nn.GELU, bias: bool = True, dtype=None, device=None):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -45,7 +44,7 @@ class Mlp(nn.Module):
         self.act = act_layer
         self.fc2 = nn.Linear(hidden_features, out_features, bias=bias, dtype=dtype, device=device)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc1(x)
         x = self.act(x)
         x = self.fc2(x)
@@ -56,9 +55,8 @@ class Mlp(nn.Module):
 ### CLIP
 #################################################################################################
 
-
 class CLIPAttention(torch.nn.Module):
-    def __init__(self, embed_dim, heads, dtype, device):
+    def __init__(self, embed_dim: int, heads: int, dtype: torch.dtype, device: torch.device):
         super().__init__()
         self.heads = heads
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=True, dtype=dtype, device=device)
@@ -66,7 +64,7 @@ class CLIPAttention(torch.nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=True, dtype=dtype, device=device)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True, dtype=dtype, device=device)
 
-    def forward(self, x, mask=None):
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
         q = self.q_proj(x)
         k = self.k_proj(x)
         v = self.v_proj(x)
@@ -80,26 +78,25 @@ ACTIVATIONS = {
 }
 
 class CLIPLayer(torch.nn.Module):
-    def __init__(self, embed_dim, heads, intermediate_size, intermediate_activation, dtype, device):
+    def __init__(self, embed_dim: int, heads: int, intermediate_size: int, intermediate_activation: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
         self.layer_norm1 = nn.LayerNorm(embed_dim, dtype=dtype, device=device)
         self.self_attn = CLIPAttention(embed_dim, heads, dtype, device)
         self.layer_norm2 = nn.LayerNorm(embed_dim, dtype=dtype, device=device)
-        #self.mlp = CLIPMLP(embed_dim, intermediate_size, intermediate_activation, dtype, device)
         self.mlp = Mlp(embed_dim, intermediate_size, embed_dim, act_layer=ACTIVATIONS[intermediate_activation], dtype=dtype, device=device)
 
-    def forward(self, x, mask=None):
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
         x += self.self_attn(self.layer_norm1(x), mask)
         x += self.mlp(self.layer_norm2(x))
         return x
 
 
 class CLIPEncoder(torch.nn.Module):
-    def __init__(self, num_layers, embed_dim, heads, intermediate_size, intermediate_activation, dtype, device):
+    def __init__(self, num_layers: int, embed_dim: int, heads: int, intermediate_size: int, intermediate_activation: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
-        self.layers = torch.nn.ModuleList([CLIPLayer(embed_dim, heads, intermediate_size, intermediate_activation, dtype, device) for i in range(num_layers)])
+        self.layers = torch.nn.ModuleList([CLIPLayer(embed_dim, heads, intermediate_size, intermediate_activation, dtype, device) for _ in range(num_layers)])
 
-    def forward(self, x, mask=None, intermediate_output=None):
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None, intermediate_output: int = None):
         if intermediate_output is not None:
             if intermediate_output < 0:
                 intermediate_output = len(self.layers) + intermediate_output
@@ -112,17 +109,17 @@ class CLIPEncoder(torch.nn.Module):
 
 
 class CLIPEmbeddings(torch.nn.Module):
-    def __init__(self, embed_dim, vocab_size=49408, num_positions=77, dtype=None, device=None, textual_inversion_key="clip_l"):
+    def __init__(self, embed_dim: int, vocab_size: int = 49408, num_positions: int = 77, dtype: torch.dtype = None, device: torch.device = None, textual_inversion_key: str = "clip_l"):
         super().__init__()
         self.token_embedding = sd_hijack.TextualInversionEmbeddings(vocab_size, embed_dim, dtype=dtype, device=device, textual_inversion_key=textual_inversion_key)
         self.position_embedding = torch.nn.Embedding(num_positions, embed_dim, dtype=dtype, device=device)
 
-    def forward(self, input_tokens):
+    def forward(self, input_tokens: torch.Tensor) -> torch.Tensor:
         return self.token_embedding(input_tokens) + self.position_embedding.weight
 
 
 class CLIPTextModel_(torch.nn.Module):
-    def __init__(self, config_dict, dtype, device):
+    def __init__(self, config_dict: dict, dtype: torch.dtype, device: torch.device):
         num_layers = config_dict["num_hidden_layers"]
         embed_dim = config_dict["hidden_size"]
         heads = config_dict["num_attention_heads"]
@@ -133,7 +130,7 @@ class CLIPTextModel_(torch.nn.Module):
         self.encoder = CLIPEncoder(num_layers, embed_dim, heads, intermediate_size, intermediate_activation, dtype, device)
         self.final_layer_norm = nn.LayerNorm(embed_dim, dtype=dtype, device=device)
 
-    def forward(self, input_tokens, intermediate_output=None, final_layer_norm_intermediate=True):
+    def forward(self, input_tokens: torch.Tensor, intermediate_output: int = None, final_layer_norm_intermediate: bool = True):
         x = self.embeddings(input_tokens)
         causal_mask = torch.empty(x.shape[1], x.shape[1], dtype=x.dtype, device=x.device).fill_(float("-inf")).triu_(1)
         x, i = self.encoder(x, mask=causal_mask, intermediate_output=intermediate_output)
@@ -145,7 +142,7 @@ class CLIPTextModel_(torch.nn.Module):
 
 
 class CLIPTextModel(torch.nn.Module):
-    def __init__(self, config_dict, dtype, device):
+    def __init__(self, config_dict: dict, dtype: torch.dtype, device: torch.device):
         super().__init__()
         self.num_layers = config_dict["num_hidden_layers"]
         self.text_model = CLIPTextModel_(config_dict, dtype, device)
@@ -154,10 +151,10 @@ class CLIPTextModel(torch.nn.Module):
         self.text_projection.weight.copy_(torch.eye(embed_dim))
         self.dtype = dtype
 
-    def get_input_embeddings(self):
+    def get_input_embeddings(self) -> nn.Embedding:
         return self.text_model.embeddings.token_embedding
 
-    def set_input_embeddings(self, embeddings):
+    def set_input_embeddings(self, embeddings: nn.Embedding):
         self.text_model.embeddings.token_embedding = embeddings
 
     def forward(self, *args, **kwargs):
@@ -167,7 +164,7 @@ class CLIPTextModel(torch.nn.Module):
 
 
 class SDTokenizer:
-    def __init__(self, max_length=77, pad_with_end=True, tokenizer=None, has_start_token=True, pad_to_max_length=True, min_length=None):
+    def __init__(self, max_length: int = 77, pad_with_end: bool = True, tokenizer=None, has_start_token: bool = True, pad_to_max_length: bool = True, min_length: int = None):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.min_length = min_length
@@ -186,9 +183,8 @@ class SDTokenizer:
         self.inv_vocab = {v: k for k, v in vocab.items()}
         self.max_word_length = 8
 
-
-    def tokenize_with_weights(self, text:str):
-        """Tokenize the text, with weight values - presume 1.0 for all and ignore other features here. The details aren't relevant for a reference impl, and weights themselves has weak effect on SD3."""
+    def tokenize_with_weights(self, text: str) -> list:
+        """Tokenize the text, with weight values - presume 1.0 for all and ignore other features here. The details aren't relevant for a reference implementation, and weights themselves have weak effect on SD3."""
         if self.pad_with_end:
             pad_token = self.end_token
         else:
@@ -220,7 +216,7 @@ class SD3Tokenizer:
         self.clip_g = SDXLClipGTokenizer(clip_tokenizer)
         self.t5xxl = T5XXLTokenizer()
 
-    def tokenize_with_weights(self, text:str):
+    def tokenize_with_weights(self, text: str) -> dict:
         out = {}
         out["g"] = self.clip_g.tokenize_with_weights(text)
         out["l"] = self.clip_l.tokenize_with_weights(text)
@@ -305,206 +301,3 @@ class T5XXLModel(SDClipModel):
     """Wraps the T5-XXL model into the SD-CLIP-Model interface for convenience"""
     def __init__(self, config, device="cpu", layer="last", layer_idx=None, dtype=None):
         super().__init__(device=device, layer=layer, layer_idx=layer_idx, textmodel_json_config=config, dtype=dtype, special_tokens={"end": 1, "pad": 0}, model_class=T5)
-
-
-#################################################################################################
-### T5 implementation, for the T5-XXL text encoder portion, largely pulled from upstream impl
-#################################################################################################
-
-class T5XXLTokenizer(SDTokenizer):
-    """Wraps the T5 Tokenizer from HF into the SDTokenizer interface"""
-    def __init__(self):
-        super().__init__(pad_with_end=False, tokenizer=T5TokenizerFast.from_pretrained("google/t5-v1_1-xxl"), has_start_token=False, pad_to_max_length=False, max_length=99999999, min_length=77)
-
-
-class T5LayerNorm(torch.nn.Module):
-    def __init__(self, hidden_size, eps=1e-6, dtype=None, device=None):
-        super().__init__()
-        self.weight = torch.nn.Parameter(torch.ones(hidden_size, dtype=dtype, device=device))
-        self.variance_epsilon = eps
-
-    def forward(self, x):
-        variance = x.pow(2).mean(-1, keepdim=True)
-        x = x * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight.to(device=x.device, dtype=x.dtype) * x
-
-
-class T5DenseGatedActDense(torch.nn.Module):
-    def __init__(self, model_dim, ff_dim, dtype, device):
-        super().__init__()
-        self.wi_0 = AutocastLinear(model_dim, ff_dim, bias=False, dtype=dtype, device=device)
-        self.wi_1 = AutocastLinear(model_dim, ff_dim, bias=False, dtype=dtype, device=device)
-        self.wo = AutocastLinear(ff_dim, model_dim, bias=False, dtype=dtype, device=device)
-
-    def forward(self, x):
-        hidden_gelu = torch.nn.functional.gelu(self.wi_0(x), approximate="tanh")
-        hidden_linear = self.wi_1(x)
-        x = hidden_gelu * hidden_linear
-        x = self.wo(x)
-        return x
-
-
-class T5LayerFF(torch.nn.Module):
-    def __init__(self, model_dim, ff_dim, dtype, device):
-        super().__init__()
-        self.DenseReluDense = T5DenseGatedActDense(model_dim, ff_dim, dtype, device)
-        self.layer_norm = T5LayerNorm(model_dim, dtype=dtype, device=device)
-
-    def forward(self, x):
-        forwarded_states = self.layer_norm(x)
-        forwarded_states = self.DenseReluDense(forwarded_states)
-        x += forwarded_states
-        return x
-
-
-class T5Attention(torch.nn.Module):
-    def __init__(self, model_dim, inner_dim, num_heads, relative_attention_bias, dtype, device):
-        super().__init__()
-        # Mesh TensorFlow initialization to avoid scaling before softmax
-        self.q = AutocastLinear(model_dim, inner_dim, bias=False, dtype=dtype, device=device)
-        self.k = AutocastLinear(model_dim, inner_dim, bias=False, dtype=dtype, device=device)
-        self.v = AutocastLinear(model_dim, inner_dim, bias=False, dtype=dtype, device=device)
-        self.o = AutocastLinear(inner_dim, model_dim, bias=False, dtype=dtype, device=device)
-        self.num_heads = num_heads
-        self.relative_attention_bias = None
-        if relative_attention_bias:
-            self.relative_attention_num_buckets = 32
-            self.relative_attention_max_distance = 128
-            self.relative_attention_bias = torch.nn.Embedding(self.relative_attention_num_buckets, self.num_heads, device=device)
-
-    @staticmethod
-    def _relative_position_bucket(relative_position, bidirectional=True, num_buckets=32, max_distance=128):
-        """
-        Adapted from Mesh Tensorflow:
-        https://github.com/tensorflow/mesh/blob/0cb87fe07da627bf0b7e60475d59f95ed6b5be3d/mesh_tensorflow/transformer/transformer_layers.py#L593
-
-        Translate relative position to a bucket number for relative attention. The relative position is defined as
-        memory_position - query_position, i.e. the distance in tokens from the attending position to the attended-to
-        position. If bidirectional=False, then positive relative positions are invalid. We use smaller buckets for
-        small absolute relative_position and larger buckets for larger absolute relative_positions. All relative
-        positions >=max_distance map to the same bucket. All relative positions <=-max_distance map to the same bucket.
-        This should allow for more graceful generalization to longer sequences than the model has been trained on
-
-        Args:
-            relative_position: an int32 Tensor
-            bidirectional: a boolean - whether the attention is bidirectional
-            num_buckets: an integer
-            max_distance: an integer
-
-        Returns:
-            a Tensor with the same shape as relative_position, containing int32 values in the range [0, num_buckets)
-        """
-        relative_buckets = 0
-        if bidirectional:
-            num_buckets //= 2
-            relative_buckets += (relative_position > 0).to(torch.long) * num_buckets
-            relative_position = torch.abs(relative_position)
-        else:
-            relative_position = -torch.min(relative_position, torch.zeros_like(relative_position))
-        # now relative_position is in the range [0, inf)
-        # half of the buckets are for exact increments in positions
-        max_exact = num_buckets // 2
-        is_small = relative_position < max_exact
-        # The other half of the buckets are for logarithmically bigger bins in positions up to max_distance
-        relative_position_if_large = max_exact + (
-            torch.log(relative_position.float() / max_exact)
-            / math.log(max_distance / max_exact)
-            * (num_buckets - max_exact)
-        ).to(torch.long)
-        relative_position_if_large = torch.min(relative_position_if_large, torch.full_like(relative_position_if_large, num_buckets - 1))
-        relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
-        return relative_buckets
-
-    def compute_bias(self, query_length, key_length, device):
-        """Compute binned relative position bias"""
-        context_position = torch.arange(query_length, dtype=torch.long, device=device)[:, None]
-        memory_position = torch.arange(key_length, dtype=torch.long, device=device)[None, :]
-        relative_position = memory_position - context_position  # shape (query_length, key_length)
-        relative_position_bucket = self._relative_position_bucket(
-            relative_position,  # shape (query_length, key_length)
-            bidirectional=True,
-            num_buckets=self.relative_attention_num_buckets,
-            max_distance=self.relative_attention_max_distance,
-        )
-        values = self.relative_attention_bias(relative_position_bucket)  # shape (query_length, key_length, num_heads)
-        values = values.permute([2, 0, 1]).unsqueeze(0)  # shape (1, num_heads, query_length, key_length)
-        return values
-
-    def forward(self, x, past_bias=None):
-        q = self.q(x)
-        k = self.k(x)
-        v = self.v(x)
-
-        if self.relative_attention_bias is not None:
-            past_bias = self.compute_bias(x.shape[1], x.shape[1], x.device)
-        if past_bias is not None:
-            mask = past_bias
-        else:
-            mask = None
-
-        out = attention(q, k * ((k.shape[-1] / self.num_heads) ** 0.5), v, self.num_heads, mask.to(x.dtype) if mask is not None else None)
-
-        return self.o(out), past_bias
-
-
-class T5LayerSelfAttention(torch.nn.Module):
-    def __init__(self, model_dim, inner_dim, ff_dim, num_heads, relative_attention_bias, dtype, device):
-        super().__init__()
-        self.SelfAttention = T5Attention(model_dim, inner_dim, num_heads, relative_attention_bias, dtype, device)
-        self.layer_norm = T5LayerNorm(model_dim, dtype=dtype, device=device)
-
-    def forward(self, x, past_bias=None):
-        output, past_bias = self.SelfAttention(self.layer_norm(x), past_bias=past_bias)
-        x += output
-        return x, past_bias
-
-
-class T5Block(torch.nn.Module):
-    def __init__(self, model_dim, inner_dim, ff_dim, num_heads, relative_attention_bias, dtype, device):
-        super().__init__()
-        self.layer = torch.nn.ModuleList()
-        self.layer.append(T5LayerSelfAttention(model_dim, inner_dim, ff_dim, num_heads, relative_attention_bias, dtype, device))
-        self.layer.append(T5LayerFF(model_dim, ff_dim, dtype, device))
-
-    def forward(self, x, past_bias=None):
-        x, past_bias = self.layer[0](x, past_bias)
-        x = self.layer[-1](x)
-        return x, past_bias
-
-
-class T5Stack(torch.nn.Module):
-    def __init__(self, num_layers, model_dim, inner_dim, ff_dim, num_heads, vocab_size, dtype, device):
-        super().__init__()
-        self.embed_tokens = torch.nn.Embedding(vocab_size, model_dim, device=device)
-        self.block = torch.nn.ModuleList([T5Block(model_dim, inner_dim, ff_dim, num_heads, relative_attention_bias=(i == 0), dtype=dtype, device=device) for i in range(num_layers)])
-        self.final_layer_norm = T5LayerNorm(model_dim, dtype=dtype, device=device)
-
-    def forward(self, input_ids, intermediate_output=None, final_layer_norm_intermediate=True):
-        intermediate = None
-        x = self.embed_tokens(input_ids).to(torch.float32)  # needs float32 or else T5 returns all zeroes
-        past_bias = None
-        for i, layer in enumerate(self.block):
-            x, past_bias = layer(x, past_bias)
-            if i == intermediate_output:
-                intermediate = x.clone()
-        x = self.final_layer_norm(x)
-        if intermediate is not None and final_layer_norm_intermediate:
-            intermediate = self.final_layer_norm(intermediate)
-        return x, intermediate
-
-
-class T5(torch.nn.Module):
-    def __init__(self, config_dict, dtype, device):
-        super().__init__()
-        self.num_layers = config_dict["num_layers"]
-        self.encoder = T5Stack(self.num_layers, config_dict["d_model"], config_dict["d_model"], config_dict["d_ff"], config_dict["num_heads"], config_dict["vocab_size"], dtype, device)
-        self.dtype = dtype
-
-    def get_input_embeddings(self):
-        return self.encoder.embed_tokens
-
-    def set_input_embeddings(self, embeddings):
-        self.encoder.embed_tokens = embeddings
-
-    def forward(self, *args, **kwargs):
-        return self.encoder(*args, **kwargs)

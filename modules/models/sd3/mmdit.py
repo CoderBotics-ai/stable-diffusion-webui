@@ -1,5 +1,3 @@
-### This file contains impls for MM-DiT, the core model component of SD3
-
 import math
 from typing import Dict, Optional
 import numpy as np
@@ -28,14 +26,14 @@ class PatchEmbed(nn.Module):
         self.patch_size = (patch_size, patch_size)
         if img_size is not None:
             self.img_size = (img_size, img_size)
-            self.grid_size = tuple([s // p for s, p in zip(self.img_size, self.patch_size)])
+            self.grid_size = tuple(s // p for s, p in zip(self.img_size, self.patch_size))
             self.num_patches = self.grid_size[0] * self.grid_size[1]
         else:
             self.img_size = None
             self.grid_size = None
             self.num_patches = None
 
-        # flatten spatial dim and transpose to channels last, kept for bwd compat
+        # flatten spatial dim and transpose to channels last, kept for backward compatibility
         self.flatten = flatten
         self.strict_img_size = strict_img_size
         self.dynamic_img_pad = dynamic_img_pad
@@ -65,7 +63,7 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
     """
     grid_size: int of the grid height and width
     return:
-    pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+    pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (with or without cls_token)
     """
     grid_h = np.arange(grid_size, dtype=np.float32)
     grid_w = np.arange(grid_size, dtype=np.float32)

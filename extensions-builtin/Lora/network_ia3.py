@@ -10,7 +10,7 @@ class ModuleTypeIa3(network.ModuleType):
 
 
 class NetworkModuleIa3(network.NetworkModule):
-    def __init__(self,  net: network.Network, weights: network.NetworkWeights):
+    def __init__(self, net: network.Network, weights: network.NetworkWeights):
         super().__init__(net, weights)
 
         self.w = weights.w["weight"]
