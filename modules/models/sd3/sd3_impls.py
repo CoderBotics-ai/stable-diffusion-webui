@@ -260,8 +260,8 @@ class VAEEncoder(torch.nn.Module):
         for i_level in range(self.num_resolutions):
             block = torch.nn.ModuleList()
             attn = torch.nn.ModuleList()
-            block_in = ch*in_ch_mult[i_level]
-            block_out = ch*ch_mult[i_level]
+            block_in = ch * in_ch_mult[i_level]
+            block_out = ch * ch_mult[i_level]
             for _ in range(num_res_blocks):
                 block.append(ResnetBlock(in_channels=block_in, out_channels=block_out, dtype=dtype, device=device))
                 block_in = block_out

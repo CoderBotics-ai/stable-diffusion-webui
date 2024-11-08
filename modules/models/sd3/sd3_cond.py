@@ -17,8 +17,7 @@ class SafetensorsMapping(typing.Mapping):
         return len(self.file.keys())
 
     def __iter__(self):
-        for key in self.file.keys():
-            yield key
+        return iter(self.file.keys())
 
     def __getitem__(self, key):
         return self.file.get_tensor(key)
@@ -77,7 +76,7 @@ class Sd3ClipLG(sd_hijack_clip.TextConditionalModel):
 
         for batch_pos in range(tokens_g.shape[0]):
             index = tokens_g[batch_pos].cpu().tolist().index(self.id_end)
-            tokens_g[batch_pos, index+1:tokens_g.shape[1]] = 0
+            tokens_g[batch_pos, index + 1:tokens_g.shape[1]] = 0
 
         l_out, l_pooled = self.clip_l(tokens)
         g_out, g_pooled = self.clip_g(tokens_g)
@@ -91,7 +90,7 @@ class Sd3ClipLG(sd_hijack_clip.TextConditionalModel):
         return lg_out
 
     def encode_embedding_init_text(self, init_text, nvpt):
-        return torch.zeros((nvpt, 768+1280), device=devices.device) # XXX
+        return torch.zeros((nvpt, 768 + 1280), device=devices.device)  # XXX
 
 
 class Sd3T5(torch.nn.Module):
@@ -154,7 +153,7 @@ class Sd3T5(torch.nn.Module):
         return t5_out
 
     def encode_embedding_init_text(self, init_text, nvpt):
-        return torch.zeros((nvpt, 4096), device=devices.device) # XXX
+        return torch.zeros((nvpt, 4096), device=devices.device)  # XXX
 
 
 class SD3Cond(torch.nn.Module):
