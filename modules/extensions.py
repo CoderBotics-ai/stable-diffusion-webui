@@ -14,11 +14,9 @@ extensions: list[Extension] = []
 extension_paths: dict[str, Extension] = {}
 loaded_extensions: dict[str, Exception] = {}
 
-
 os.makedirs(extensions_dir, exist_ok=True)
 
-
-def active():
+def active() -> list[Extension]:
     if shared.cmd_opts.disable_all_extensions or shared.opts.disable_all_extensions == "all":
         return []
     elif shared.cmd_opts.disable_extra_extensions or shared.opts.disable_all_extensions == "extra":
@@ -26,45 +24,35 @@ def active():
     else:
         return [x for x in extensions if x.enabled]
 
-
 @dataclasses.dataclass
 class CallbackOrderInfo:
     name: str
-    before: list
-    after: list
-
+    before: list[str]
+    after: list[str]
 
 class ExtensionMetadata:
     filename = "metadata.ini"
     config: configparser.ConfigParser
     canonical_name: str
-    requires: list
+    requires: list[str]
 
-    def __init__(self, path, canonical_name):
+    def __init__(self, path: str, canonical_name: str):
         self.config = configparser.ConfigParser()
 
         filepath = os.path.join(path, self.filename)
-        # `self.config.read()` will quietly swallow OSErrors (which FileNotFoundError is),
-        # so no need to check whether the file exists beforehand.
         try:
             self.config.read(filepath)
         except Exception:
             errors.report(f"Error reading {self.filename} for extension {canonical_name}.", exc_info=True)
 
-        self.canonical_name = self.config.get("Extension", "Name", fallback=canonical_name)
-        self.canonical_name = canonical_name.lower().strip()
+        self.canonical_name = self.config.get("Extension", "Name", fallback=canonical_name).lower().strip()
+        self.requires = []
 
-        self.requires = None
-
-    def get_script_requirements(self, field, section, extra_section=None):
-        """reads a list of requirements from the config; field is the name of the field in the ini file,
-        like Requires or Before, and section is the name of the [section] in the ini file; additionally,
-        reads more requirements from [extra_section] if specified."""
-
+    def get_script_requirements(self, field: str, section: str, extra_section: str = None) -> list[str]:
         x = self.config.get(section, field, fallback='')
 
         if extra_section:
-            x = x + ', ' + self.config.get(extra_section, field, fallback='')
+            x += ', ' + self.config.get(extra_section, field, fallback='')
 
         listed_requirements = self.parse_list(x.lower())
         res = []
@@ -76,13 +64,9 @@ class ExtensionMetadata:
 
         return res
 
-    def parse_list(self, text):
-        """converts a line from config ("ext1 ext2, ext3  ") into a python list (["ext1", "ext2", "ext3"])"""
-
+    def parse_list(self, text: str) -> list[str]:
         if not text:
             return []
-
-        # both "," and " " are accepted as separator
         return [x for x in re.split(r"[,\s]+", text.strip()) if x]
 
     def list_callback_order_instructions(self):
@@ -101,13 +85,12 @@ class ExtensionMetadata:
 
             yield CallbackOrderInfo(callback_name, before, after)
 
-
 class Extension:
     lock = threading.Lock()
     cached_fields = ['remote', 'commit_date', 'branch', 'commit_hash', 'version']
     metadata: ExtensionMetadata
 
-    def __init__(self, name, path, enabled=True, is_builtin=False, metadata=None):
+    def __init__(self, name: str, path: str, enabled: bool = True, is_builtin: bool = False, metadata: ExtensionMetadata = None):
         self.name = name
         self.path = path
         self.enabled = enabled
@@ -121,12 +104,12 @@ class Extension:
         self.remote = None
         self.have_info_from_repo = False
         self.metadata = metadata if metadata else ExtensionMetadata(self.path, name.lower())
-        self.canonical_name = metadata.canonical_name
+        self.canonical_name = self.metadata.canonical_name
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {x: getattr(self, x) for x in self.cached_fields}
 
-    def from_dict(self, d):
+    def from_dict(self, d: dict):
         for field in self.cached_fields:
             setattr(self, field, d[field])
 
@@ -138,9 +121,7 @@ class Extension:
             with self.lock:
                 if self.have_info_from_repo:
                     return
-
                 self.do_read_info_from_repo()
-
                 return self.to_dict()
 
         try:
@@ -176,7 +157,7 @@ class Extension:
 
         self.have_info_from_repo = True
 
-    def list_files(self, subdir, extension):
+    def list_files(self, subdir: str, extension: str) -> list[scripts.ScriptFile]:
         dirpath = os.path.join(self.path, subdir)
         if not os.path.isdir(dirpath):
             return []
@@ -185,9 +166,7 @@ class Extension:
         for filename in sorted(os.listdir(dirpath)):
             res.append(scripts.ScriptFile(self.path, filename, os.path.join(dirpath, filename)))
 
-        res = [x for x in res if os.path.splitext(x.path)[1].lower() == extension and os.path.isfile(x.path)]
-
-        return res
+        return [x for x in res if os.path.splitext(x.path)[1].lower() == extension and os.path.isfile(x.path)]
 
     def check_updates(self):
         repo = Repo(self.path)
@@ -214,16 +193,13 @@ class Extension:
         self.can_update = False
         self.status = "latest"
 
-    def fetch_and_reset_hard(self, commit=None):
+    def fetch_and_reset_hard(self, commit: str = None):
         repo = Repo(self.path)
         if commit is None:
             commit = f'{repo.remote().name}/{self.branch}'
-        # Fix: `error: Your local changes to the following files would be overwritten by merge`,
-        # because WSL2 Docker set 755 file permissions instead of 644, this results to the error.
         repo.git.fetch(all=True)
         repo.git.reset(commit, hard=True)
         self.have_info_from_repo = False
-
 
 def list_extensions():
     extensions.clear()
@@ -239,8 +215,6 @@ def list_extensions():
     elif shared.opts.disable_all_extensions == "extra":
         print("*** \"Disable all extensions\" option was set, will only load built-in extensions ***")
 
-
-    # scan through extensions directory and load metadata
     for dirname in [extensions_builtin_dir, extensions_dir]:
         if not os.path.isdir(dirname):
             continue
@@ -253,7 +227,6 @@ def list_extensions():
             canonical_name = extension_dirname
             metadata = ExtensionMetadata(path, canonical_name)
 
-            # check for duplicated canonical names
             already_loaded_extension = loaded_extensions.get(metadata.canonical_name)
             if already_loaded_extension is not None:
                 errors.report(f'Duplicate canonical name "{canonical_name}" found in extensions "{extension_dirname}" and "{already_loaded_extension.name}". Former will be discarded.', exc_info=False)
@@ -268,7 +241,6 @@ def list_extensions():
     for extension in extensions:
         extension.metadata.requires = extension.metadata.get_script_requirements("Requires", "Extension")
 
-    # check for requirements
     for extension in extensions:
         if not extension.enabled:
             continue
@@ -283,8 +255,7 @@ def list_extensions():
                 errors.report(f'Extension "{extension.name}" requires "{required_extension.name}" which is disabled.', exc_info=False)
                 continue
 
-
-def find_extension(filename):
+def find_extension(filename: str) -> Extension | None:
     parentdir = os.path.dirname(os.path.realpath(filename))
 
     while parentdir != filename:
@@ -296,4 +267,3 @@ def find_extension(filename):
         parentdir = os.path.dirname(filename)
 
     return None
-

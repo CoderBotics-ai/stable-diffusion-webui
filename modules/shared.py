@@ -20,36 +20,36 @@ styles_filename = cmd_opts.styles_file = cmd_opts.styles_file if len(cmd_opts.st
 config_filename = cmd_opts.ui_settings_file
 hide_dirs = {"visible": not cmd_opts.hide_ui_dir_config}
 
-demo: gr.Blocks = None
+demo: gr.Blocks | None = None  # Explicitly allowing None for clarity
 
-device: str = None
+device: str | None = None  # Explicitly allowing None for clarity
 
-weight_load_location: str = None
+weight_load_location: str | None = None  # Explicitly allowing None for clarity
 
 xformers_available = False
 
-hypernetworks = {}
+hypernetworks: dict = {}
 
-loaded_hypernetworks = []
+loaded_hypernetworks: list = []
 
-state: 'shared_state.State' = None
+state: 'shared_state.State' | None = None  # Explicitly allowing None for clarity
 
-prompt_styles: 'styles.StyleDatabase' = None
+prompt_styles: 'styles.StyleDatabase' | None = None  # Explicitly allowing None for clarity
 
-interrogator: 'interrogate.InterrogateModels' = None
+interrogator: 'interrogate.InterrogateModels' | None = None  # Explicitly allowing None for clarity
 
-face_restorers = []
+face_restorers: list = []
 
-options_templates: dict = None
-opts: options.Options = None
-restricted_opts: set[str] = None
+options_templates: dict | None = None  # Explicitly allowing None for clarity
+opts: options.Options | None = None  # Explicitly allowing None for clarity
+restricted_opts: set[str] | None = None  # Explicitly allowing None for clarity
 
-sd_model: sd_models_types.WebuiSdModel = None
+sd_model: sd_models_types.WebuiSdModel | None = None  # Explicitly allowing None for clarity
 
-settings_components: dict = None
+settings_components: dict | None = None  # Explicitly allowing None for clarity
 """assigned from ui.py, a mapping on setting names to gradio components responsible for those settings"""
 
-tab_names = []
+tab_names: list = []
 
 latent_upscale_default_mode = "Latent"
 latent_upscale_modes = {
@@ -61,17 +61,17 @@ latent_upscale_modes = {
     "Latent (nearest-exact)": {"mode": "nearest-exact", "antialias": False},
 }
 
-sd_upscalers = []
+sd_upscalers: list = []
 
-clip_model = None
+clip_model: str | None = None  # Explicitly allowing None for clarity
 
 progress_print_out = sys.stdout
 
 gradio_theme = gr.themes.Base()
 
-total_tqdm: 'shared_total_tqdm.TotalTQDM' = None
+total_tqdm: 'shared_total_tqdm.TotalTQDM' | None = None  # Explicitly allowing None for clarity
 
-mem_mon: 'memmon.MemUsageMonitor' = None
+mem_mon: 'memmon.MemUsageMonitor' | None = None  # Explicitly allowing None for clarity
 
 options_section = options.options_section
 OptionInfo = options.OptionInfo

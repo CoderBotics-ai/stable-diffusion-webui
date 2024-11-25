@@ -21,6 +21,7 @@ checkpoints_loaded = collections.OrderedDict()
 
 
 def get_loaded_vae_name():
+    """Returns the name of the currently loaded VAE file."""
     if loaded_vae_file is None:
         return None
 
@@ -28,6 +29,7 @@ def get_loaded_vae_name():
 
 
 def get_loaded_vae_hash():
+    """Returns the hash of the currently loaded VAE file."""
     if loaded_vae_file is None:
         return None
 
@@ -37,12 +39,14 @@ def get_loaded_vae_hash():
 
 
 def get_base_vae(model):
+    """Returns the base VAE for the given model if it matches the checkpoint info."""
     if base_vae is not None and checkpoint_info == model.sd_checkpoint_info and model:
         return base_vae
     return None
 
 
 def store_base_vae(model):
+    """Stores the current model's base VAE state."""
     global base_vae, checkpoint_info
     if checkpoint_info != model.sd_checkpoint_info:
         assert not loaded_vae_file, "Trying to store non-base VAE!"
@@ -51,12 +55,14 @@ def store_base_vae(model):
 
 
 def delete_base_vae():
+    """Deletes the stored base VAE."""
     global base_vae, checkpoint_info
     base_vae = None
     checkpoint_info = None
 
 
 def restore_base_vae(model):
+    """Restores the base VAE for the given model."""
     global loaded_vae_file
     if base_vae is not None and checkpoint_info == model.sd_checkpoint_info:
         print("Restoring base VAE")
@@ -66,10 +72,12 @@ def restore_base_vae(model):
 
 
 def get_filename(filepath):
+    """Returns the base filename from a given filepath."""
     return os.path.basename(filepath)
 
 
 def refresh_vae_list():
+    """Refreshes the list of available VAE files."""
     vae_dict.clear()
 
     paths = [
@@ -107,6 +115,7 @@ def refresh_vae_list():
 
 
 def find_vae_near_checkpoint(checkpoint_file):
+    """Finds a VAE file that is near the specified checkpoint file."""
     checkpoint_path = os.path.basename(checkpoint_file).rsplit('.', 1)[0]
     for vae_file in vae_dict.values():
         if os.path.basename(vae_file).startswith(checkpoint_path):
@@ -122,14 +131,17 @@ class VaeResolution:
     resolved: bool = True
 
     def tuple(self):
+        """Returns a tuple of the VAE and its source."""
         return self.vae, self.source
 
 
 def is_automatic():
+    """Checks if the VAE setting is set to automatic."""
     return shared.opts.sd_vae in {"Automatic", "auto"}  # "auto" for people with old config
 
 
 def resolve_vae_from_setting() -> VaeResolution:
+    """Resolves the VAE from the user settings."""
     if shared.opts.sd_vae == "None":
         return VaeResolution()
 
@@ -144,6 +156,7 @@ def resolve_vae_from_setting() -> VaeResolution:
 
 
 def resolve_vae_from_user_metadata(checkpoint_file) -> VaeResolution:
+    """Resolves the VAE from user metadata associated with the checkpoint file."""
     metadata = extra_networks.get_user_metadata(checkpoint_file)
     vae_metadata = metadata.get("vae", None)
     if vae_metadata is not None and vae_metadata != "Automatic":
@@ -158,6 +171,7 @@ def resolve_vae_from_user_metadata(checkpoint_file) -> VaeResolution:
 
 
 def resolve_vae_near_checkpoint(checkpoint_file) -> VaeResolution:
+    """Resolves the VAE that is found near the specified checkpoint file."""
     vae_near_checkpoint = find_vae_near_checkpoint(checkpoint_file)
     if vae_near_checkpoint is not None and (not shared.opts.sd_vae_overrides_per_model_preferences or is_automatic()):
         return VaeResolution(vae_near_checkpoint, 'found near the checkpoint')
@@ -166,6 +180,7 @@ def resolve_vae_near_checkpoint(checkpoint_file) -> VaeResolution:
 
 
 def resolve_vae(checkpoint_file) -> VaeResolution:
+    """Resolves the VAE based on various criteria including command line arguments and user settings."""
     if shared.cmd_opts.vae_path is not None:
         return VaeResolution(shared.cmd_opts.vae_path, 'from commandline argument')
 
@@ -186,14 +201,15 @@ def resolve_vae(checkpoint_file) -> VaeResolution:
 
 
 def load_vae_dict(filename, map_location):
+    """Loads the VAE dictionary from the specified file."""
     vae_ckpt = sd_models.read_state_dict(filename, map_location=map_location)
     vae_dict_1 = {k: v for k, v in vae_ckpt.items() if k[0:4] != "loss" and k not in vae_ignore_keys}
     return vae_dict_1
 
 
 def load_vae(model, vae_file=None, vae_source="from unknown source"):
+    """Loads the VAE weights into the specified model."""
     global vae_dict, base_vae, loaded_vae_file
-    # save_settings = False
 
     cache_enabled = shared.opts.sd_vae_checkpoint_cache > 0
 
@@ -217,11 +233,10 @@ def load_vae(model, vae_file=None, vae_source="from unknown source"):
 
         # clean up cache if limit is reached
         if cache_enabled:
-            while len(checkpoints_loaded) > shared.opts.sd_vae_checkpoint_cache + 1: # we need to count the current model
+            while len(checkpoints_loaded) > shared.opts.sd_vae_checkpoint_cache + 1:  # we need to count the current model
                 checkpoints_loaded.popitem(last=False)  # LRU
 
         # If vae used is not in dict, update it
-        # It will be removed on refresh though
         vae_opt = get_filename(vae_file)
         if vae_opt not in vae_dict:
             vae_dict[vae_opt] = vae_file
@@ -236,11 +251,13 @@ def load_vae(model, vae_file=None, vae_source="from unknown source"):
 
 # don't call this from outside
 def _load_vae_dict(model, vae_dict_1):
+    """Loads the VAE dictionary into the model."""
     model.first_stage_model.load_state_dict(vae_dict_1)
     model.first_stage_model.to(devices.dtype_vae)
 
 
 def clear_loaded_vae():
+    """Clears the currently loaded VAE file."""
     global loaded_vae_file
     loaded_vae_file = None
 
@@ -249,6 +266,7 @@ unspecified = object()
 
 
 def reload_vae_weights(sd_model=None, vae_file=unspecified):
+    """Reloads the VAE weights for the specified model."""
     if not sd_model:
         sd_model = shared.sd_model
 

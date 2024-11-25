@@ -82,7 +82,8 @@ class PydanticModelGenerator:
                 field_alias=fields["key"],
                 field_type=fields["type"],
                 field_value=fields["default"],
-                field_exclude=fields["exclude"] if "exclude" in fields else False))
+                field_exclude=fields.get("exclude", False)
+            ))
 
     def generate_model(self):
         """
@@ -120,7 +121,7 @@ StableDiffusionImg2ImgProcessingAPI = PydanticModelGenerator(
         {"key": "init_images", "type": list, "default": None},
         {"key": "denoising_strength", "type": float, "default": 0.75},
         {"key": "mask", "type": str, "default": None},
-        {"key": "include_init_images", "type": bool, "default": False, "exclude" : True},
+        {"key": "include_init_images", "type": bool, "default": False, "exclude": True},
         {"key": "script_name", "type": str, "default": None},
         {"key": "script_args", "type": list, "default": []},
         {"key": "send_images", "type": bool, "default": True},

@@ -36,7 +36,7 @@ ldm.util.print = shared.ldm_print
 ldm.models.diffusion.ddpm.print = shared.ldm_print
 
 optimizers = []
-current_optimizer: sd_hijack_optimizations.SdOptimization = None
+current_optimizer: sd_hijack_optimizations.SdOptimization | None = None
 
 ldm_patched_forward = sd_unet.create_unet_forward(ldm.modules.diffusionmodules.openaimodel.UNetModel.forward)
 ldm_original_forward = patches.patch(__file__, ldm.modules.diffusionmodules.openaimodel.UNetModel, "forward", ldm_patched_forward)
@@ -56,7 +56,7 @@ def list_optimizers():
     optimizers.extend(new_optimizers)
 
 
-def apply_optimizations(option=None):
+def apply_optimizations(option: str | None = None) -> str:
     global current_optimizer
 
     undo_optimizations()
@@ -118,45 +118,48 @@ def fix_checkpoint():
 
 
 def weighted_loss(sd_model, pred, target, mean=True):
-    #Calculate the weight normally, but ignore the mean
+    # Calculate the weight normally, but ignore the mean
     loss = sd_model._old_get_loss(pred, target, mean=False)
 
-    #Check if we have weights available
+    # Check if we have weights available
     weight = getattr(sd_model, '_custom_loss_weight', None)
     if weight is not None:
         loss *= weight
 
-    #Return the loss, as mean if specified
+    # Return the loss, as mean if specified
     return loss.mean() if mean else loss
+
 
 def weighted_forward(sd_model, x, c, w, *args, **kwargs):
     try:
-        #Temporarily append weights to a place accessible during loss calc
+        # Temporarily append weights to a place accessible during loss calc
         sd_model._custom_loss_weight = w
 
-        #Replace 'get_loss' with a weight-aware one. Otherwise we need to reimplement 'forward' completely
-        #Keep 'get_loss', but don't overwrite the previous old_get_loss if it's already set
+        # Replace 'get_loss' with a weight-aware one. Otherwise we need to reimplement 'forward' completely
+        # Keep 'get_loss', but don't overwrite the previous old_get_loss if it's already set
         if not hasattr(sd_model, '_old_get_loss'):
             sd_model._old_get_loss = sd_model.get_loss
         sd_model.get_loss = MethodType(weighted_loss, sd_model)
 
-        #Run the standard forward function, but with the patched 'get_loss'
+        # Run the standard forward function, but with the patched 'get_loss'
         return sd_model.forward(x, c, *args, **kwargs)
     finally:
         try:
-            #Delete temporary weights if appended
+            # Delete temporary weights if appended
             del sd_model._custom_loss_weight
         except AttributeError:
             pass
 
-        #If we have an old loss function, reset the loss function to the original one
+        # If we have an old loss function, reset the loss function to the original one
         if hasattr(sd_model, '_old_get_loss'):
             sd_model.get_loss = sd_model._old_get_loss
             del sd_model._old_get_loss
 
+
 def apply_weighted_forward(sd_model):
-    #Add new function 'weighted_forward' that can be called to calc weighted loss
+    # Add new function 'weighted_forward' that can be called to calc weighted loss
     sd_model.weighted_forward = MethodType(weighted_forward, sd_model)
+
 
 def undo_weighted_forward(sd_model):
     try:
@@ -270,140 +273,3 @@ class StableDiffusionModelHijack:
             sd_unet.original_forward = sgm_original_forward
         else:
             sd_unet.original_forward = None
-
-
-    def undo_hijack(self, m):
-        conditioner = getattr(m, 'conditioner', None)
-        if conditioner:
-            for i in range(len(conditioner.embedders)):
-                embedder = conditioner.embedders[i]
-                if isinstance(embedder, (sd_hijack_open_clip.FrozenOpenCLIPEmbedderWithCustomWords, sd_hijack_open_clip.FrozenOpenCLIPEmbedder2WithCustomWords)):
-                    embedder.wrapped.model.token_embedding = embedder.wrapped.model.token_embedding.wrapped
-                    conditioner.embedders[i] = embedder.wrapped
-                if isinstance(embedder, sd_hijack_clip.FrozenCLIPEmbedderForSDXLWithCustomWords):
-                    embedder.wrapped.transformer.text_model.embeddings.token_embedding = embedder.wrapped.transformer.text_model.embeddings.token_embedding.wrapped
-                    conditioner.embedders[i] = embedder.wrapped
-
-            if hasattr(m, 'cond_stage_model'):
-                delattr(m, 'cond_stage_model')
-
-        elif type(m.cond_stage_model) == sd_hijack_xlmr.FrozenXLMREmbedderWithCustomWords:
-            m.cond_stage_model = m.cond_stage_model.wrapped
-
-        elif type(m.cond_stage_model) == sd_hijack_clip.FrozenCLIPEmbedderWithCustomWords:
-            m.cond_stage_model = m.cond_stage_model.wrapped
-
-            model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
-            if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
-                model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
-        elif type(m.cond_stage_model) == sd_hijack_open_clip.FrozenOpenCLIPEmbedderWithCustomWords:
-            m.cond_stage_model.wrapped.model.token_embedding = m.cond_stage_model.wrapped.model.token_embedding.wrapped
-            m.cond_stage_model = m.cond_stage_model.wrapped
-
-        undo_optimizations()
-        undo_weighted_forward(m)
-
-        self.apply_circular(False)
-        self.layers = None
-        self.clip = None
-
-
-    def apply_circular(self, enable):
-        if self.circular_enabled == enable:
-            return
-
-        self.circular_enabled = enable
-
-        for layer in [layer for layer in self.layers if type(layer) == torch.nn.Conv2d]:
-            layer.padding_mode = 'circular' if enable else 'zeros'
-
-    def clear_comments(self):
-        self.comments = []
-        self.extra_generation_params = {}
-
-    def get_prompt_lengths(self, text):
-        if self.clip is None:
-            return "-", "-"
-
-        if hasattr(self.clip, 'get_token_count'):
-            token_count = self.clip.get_token_count(text)
-        else:
-            _, token_count = self.clip.process_texts([text])
-
-        return token_count, self.clip.get_target_prompt_token_count(token_count)
-
-    def redo_hijack(self, m):
-        self.undo_hijack(m)
-        self.hijack(m)
-
-
-class EmbeddingsWithFixes(torch.nn.Module):
-    def __init__(self, wrapped, embeddings, textual_inversion_key='clip_l'):
-        super().__init__()
-        self.wrapped = wrapped
-        self.embeddings = embeddings
-        self.textual_inversion_key = textual_inversion_key
-
-    def forward(self, input_ids):
-        batch_fixes = self.embeddings.fixes
-        self.embeddings.fixes = None
-
-        inputs_embeds = self.wrapped(input_ids)
-
-        if batch_fixes is None or len(batch_fixes) == 0 or max([len(x) for x in batch_fixes]) == 0:
-            return inputs_embeds
-
-        vecs = []
-        for fixes, tensor in zip(batch_fixes, inputs_embeds):
-            for offset, embedding in fixes:
-                vec = embedding.vec[self.textual_inversion_key] if isinstance(embedding.vec, dict) else embedding.vec
-                emb = devices.cond_cast_unet(vec)
-                emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])
-                tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]]).to(dtype=inputs_embeds.dtype)
-
-            vecs.append(tensor)
-
-        return torch.stack(vecs)
-
-
-class TextualInversionEmbeddings(torch.nn.Embedding):
-    def __init__(self, num_embeddings: int, embedding_dim: int, textual_inversion_key='clip_l', **kwargs):
-        super().__init__(num_embeddings, embedding_dim, **kwargs)
-
-        self.embeddings = model_hijack
-        self.textual_inversion_key = textual_inversion_key
-
-    @property
-    def wrapped(self):
-        return super().forward
-
-    def forward(self, input_ids):
-        return EmbeddingsWithFixes.forward(self, input_ids)
-
-
-def add_circular_option_to_conv_2d():
-    conv2d_constructor = torch.nn.Conv2d.__init__
-
-    def conv2d_constructor_circular(self, *args, **kwargs):
-        return conv2d_constructor(self, *args, padding_mode='circular', **kwargs)
-
-    torch.nn.Conv2d.__init__ = conv2d_constructor_circular
-
-
-model_hijack = StableDiffusionModelHijack()
-
-
-def register_buffer(self, name, attr):
-    """
-    Fix register buffer bug for Mac OS.
-    """
-
-    if type(attr) == torch.Tensor:
-        if attr.device != devices.device:
-            attr = attr.to(device=devices.device, dtype=(torch.float32 if devices.device.type == 'mps' else None))
-
-    setattr(self, name, attr)
-
-
-ldm.models.diffusion.ddim.DDIMSampler.register_buffer = register_buffer
-ldm.models.diffusion.plms.PLMSSampler.register_buffer = register_buffer
