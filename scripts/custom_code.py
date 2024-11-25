@@ -10,7 +10,7 @@ from modules.shared import cmd_opts
 def convertExpr2Expression(expr):
     expr.lineno = 0
     expr.col_offset = 0
-    result = ast.Expression(expr.value, lineno=0, col_offset = 0)
+    result = ast.Expression(expr.value, lineno=0, col_offset=0)
 
     return result
 
@@ -29,7 +29,7 @@ def exec_with_return(code, module):
     last_ast.body = code_ast.body[-1:]
 
     exec(compile(init_ast, "<ast>", "exec"), module.__dict__)
-    if type(last_ast.body[0]) == ast.Expr:
+    if isinstance(last_ast.body[0], ast.Expr):
         return eval(compile(convertExpr2Expression(last_ast.body[0]), "<ast>", "eval"), module.__dict__)
     else:
         exec(compile(last_ast, "<ast>", "exec"), module.__dict__)
@@ -53,7 +53,6 @@ p.steps = 10
 
 return process_images(p)
 """
-
 
         code = gr.Code(value=example, language="python", label="Python code", elem_id=self.elem_id("code"))
         indent_level = gr.Number(label='Indent level', value=2, precision=0, elem_id=self.elem_id("indent_level"))
