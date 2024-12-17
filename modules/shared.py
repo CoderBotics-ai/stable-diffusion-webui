@@ -1,82 +1,124 @@
+"""
+Shared configuration and state management module for Stable Diffusion Web UI.
+
+This module contains global configuration, models and state that is shared across
+the entire application. It provides centralized access to important components
+like models, options, and UI elements.
+"""
+
 import os
 import sys
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, TYPE_CHECKING
 
 import gradio as gr
 
-from modules import shared_cmd_options, shared_gradio_themes, options, shared_items, sd_models_types
-from modules.paths_internal import models_path, script_path, data_path, sd_configs_path, sd_default_config, sd_model_file, default_sd_model_file, extensions_dir, extensions_builtin_dir  # noqa: F401
-from modules import util
-from typing import TYPE_CHECKING
+from modules import (
+    shared_cmd_options, shared_gradio_themes, options, 
+    shared_items, sd_models_types, util
+)
+from modules.paths_internal import (
+    models_path, script_path, data_path, sd_configs_path,
+    sd_default_config, sd_model_file, default_sd_model_file,
+    extensions_dir, extensions_builtin_dir
+)
 
 if TYPE_CHECKING:
     from modules import shared_state, styles, interrogate, shared_total_tqdm, memmon
 
+# Command line options
 cmd_opts = shared_cmd_options.cmd_opts
 parser = shared_cmd_options.parser
 
-batch_cond_uncond = True  # old field, unused now in favor of shared.opts.batch_cond_uncond
-parallel_processing_allowed = True
-styles_filename = cmd_opts.styles_file = cmd_opts.styles_file if len(cmd_opts.styles_file) > 0 else [os.path.join(data_path, 'styles.csv')]
-config_filename = cmd_opts.ui_settings_file
-hide_dirs = {"visible": not cmd_opts.hide_ui_dir_config}
+@dataclass
+class UIConfig:
+    """Configuration for UI components and settings"""
+    styles_filename: List[str]
+    config_filename: str
+    hide_dirs: Dict[str, bool]
+    demo: Optional[gr.Blocks] = None
+    settings_components: Dict = None
+    tab_names: List[str] = None
 
-demo: gr.Blocks = None
+    def __post_init__(self):
+        self.tab_names = []
+        self.settings_components = {}
 
-device: str = None
+ui_config = UIConfig(
+    styles_filename=cmd_opts.styles_file if cmd_opts.styles_file else [os.path.join(data_path, 'styles.csv')],
+    config_filename=cmd_opts.ui_settings_file,
+    hide_dirs={"visible": not cmd_opts.hide_ui_dir_config}
+)
 
-weight_load_location: str = None
+@dataclass
+class ModelConfig:
+    """Configuration for ML models and processing"""
+    device: Optional[str] = None
+    weight_load_location: Optional[str] = None
+    xformers_available: bool = False
+    batch_cond_uncond: bool = True
+    parallel_processing_allowed: bool = True
+    
+    # Models
+    sd_model: Optional[sd_models_types.WebuiSdModel] = None
+    clip_model = None
+    hypernetworks: Dict = None
+    loaded_hypernetworks: List = None
+    face_restorers: List = None
 
-xformers_available = False
+model_config = ModelConfig(
+    hypernetworks={},
+    loaded_hypernetworks=[],
+    face_restorers=[]
+)
 
-hypernetworks = {}
+@dataclass
+class UpscaleConfig:
+    """Configuration for upscaling options"""
+    latent_upscale_default_mode: str = "Latent"
+    latent_upscale_modes: Dict = None
+    sd_upscalers: List = None
 
-loaded_hypernetworks = []
+    def __post_init__(self):
+        self.sd_upscalers = []
+        self.latent_upscale_modes = {
+            "Latent": {"mode": "bilinear", "antialias": False},
+            "Latent (antialiased)": {"mode": "bilinear", "antialias": True},
+            "Latent (bicubic)": {"mode": "bicubic", "antialias": False},
+            "Latent (bicubic antialiased)": {"mode": "bicubic", "antialias": True},
+            "Latent (nearest)": {"mode": "nearest", "antialias": False},
+            "Latent (nearest-exact)": {"mode": "nearest-exact", "antialias": False},
+        }
 
-state: 'shared_state.State' = None
+upscale_config = UpscaleConfig()
 
-prompt_styles: 'styles.StyleDatabase' = None
+# State management
+state: Optional['shared_state.State'] = None
+prompt_styles: Optional['styles.StyleDatabase'] = None
+interrogator: Optional['interrogate.InterrogateModels'] = None
+total_tqdm: Optional['shared_total_tqdm.TotalTQDM'] = None
+mem_mon: Optional['memmon.MemUsageMonitor'] = None
 
-interrogator: 'interrogate.InterrogateModels' = None
+# Options management
+options_templates: Dict = None
+opts: Optional[options.Options] = None
+restricted_opts: Set[str] = set()
 
-face_restorers = []
-
-options_templates: dict = None
-opts: options.Options = None
-restricted_opts: set[str] = None
-
-sd_model: sd_models_types.WebuiSdModel = None
-
-settings_components: dict = None
-"""assigned from ui.py, a mapping on setting names to gradio components responsible for those settings"""
-
-tab_names = []
-
-latent_upscale_default_mode = "Latent"
-latent_upscale_modes = {
-    "Latent": {"mode": "bilinear", "antialias": False},
-    "Latent (antialiased)": {"mode": "bilinear", "antialias": True},
-    "Latent (bicubic)": {"mode": "bicubic", "antialias": False},
-    "Latent (bicubic antialiased)": {"mode": "bicubic", "antialias": True},
-    "Latent (nearest)": {"mode": "nearest", "antialias": False},
-    "Latent (nearest-exact)": {"mode": "nearest-exact", "antialias": False},
-}
-
-sd_upscalers = []
-
-clip_model = None
-
-progress_print_out = sys.stdout
-
+# UI Theme
 gradio_theme = gr.themes.Base()
 
-total_tqdm: 'shared_total_tqdm.TotalTQDM' = None
+# Progress output
+progress_print_out = sys.stdout
 
-mem_mon: 'memmon.MemUsageMonitor' = None
+# Hugging Face endpoint
+hf_endpoint = os.getenv('HF_ENDPOINT', 'https://huggingface.co')
 
+# Utility functions
 options_section = options.options_section
 OptionInfo = options.OptionInfo
 OptionHTML = options.OptionHTML
 
+# Import utility functions
 natural_sort_key = util.natural_sort_key
 listfiles = util.listfiles
 html_path = util.html_path
@@ -84,11 +126,11 @@ html = util.html
 walk_files = util.walk_files
 ldm_print = util.ldm_print
 
+# Theme management
 reload_gradio_theme = shared_gradio_themes.reload_gradio_theme
 
+# Shared items management
 list_checkpoint_tiles = shared_items.list_checkpoint_tiles
 refresh_checkpoints = shared_items.refresh_checkpoints
 list_samplers = shared_items.list_samplers
 reload_hypernetworks = shared_items.reload_hypernetworks
-
-hf_endpoint = os.getenv('HF_ENDPOINT', 'https://huggingface.co')
