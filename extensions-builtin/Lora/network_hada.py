@@ -1,32 +1,62 @@
+from typing import Optional
 import lyco_helpers
 import network
+from torch import Tensor
 
 
 class ModuleTypeHada(network.ModuleType):
-    def create_module(self, net: network.Network, weights: network.NetworkWeights):
-        if all(x in weights.w for x in ["hada_w1_a", "hada_w1_b", "hada_w2_a", "hada_w2_b"]):
-            return NetworkModuleHada(net, weights)
+    def create_module(self, net: network.Network, weights: network.NetworkWeights) -> Optional[network.NetworkModule]:
+        """Create a Hada network module if required weights exist.
 
-        return None
+        Args:
+            net: The network instance
+            weights: The network weights
+
+        Returns:
+            NetworkModuleHada instance if required weights exist, None otherwise
+        """
+        required_weights = {"hada_w1_a", "hada_w1_b", "hada_w2_a", "hada_w2_b"}
+        match weights.w:
+            case w if all(key in w for key in required_weights):
+                return NetworkModuleHada(net, weights)
+            case _:
+                return None
 
 
 class NetworkModuleHada(network.NetworkModule):
-    def __init__(self,  net: network.Network, weights: network.NetworkWeights):
+    def __init__(self, net: network.Network, weights: network.NetworkWeights) -> None:
+        """Initialize the Hada network module.
+
+        Args:
+            net: The network instance
+            weights: The network weights
+        """
         super().__init__(net, weights)
 
         if hasattr(self.sd_module, 'weight'):
             self.shape = self.sd_module.weight.shape
 
-        self.w1a = weights.w["hada_w1_a"]
-        self.w1b = weights.w["hada_w1_b"]
-        self.dim = self.w1b.shape[0]
-        self.w2a = weights.w["hada_w2_a"]
-        self.w2b = weights.w["hada_w2_b"]
+        # Initialize weights
+        self.w1a: Tensor = weights.w["hada_w1_a"]
+        self.w1b: Tensor = weights.w["hada_w1_b"]
+        self.dim: int = self.w1b.shape[0]
+        self.w2a: Tensor = weights.w["hada_w2_a"]
+        self.w2b: Tensor = weights.w["hada_w2_b"]
 
-        self.t1 = weights.w.get("hada_t1")
-        self.t2 = weights.w.get("hada_t2")
+        # Optional transformation matrices
+        self.t1: Optional[Tensor] = weights.w.get("hada_t1")
+        self.t2: Optional[Tensor] = weights.w.get("hada_t2")
 
-    def calc_updown(self, orig_weight):
+    def calc_updown(self, orig_weight: Tensor) -> Tensor:
+        """Calculate the up-down weights using Hadamard product.
+
+        Args:
+            orig_weight: Original weight tensor
+
+        Returns:
+            Tensor: Calculated up-down weights
+        """
+        # Move weights to the same device as original weight
         w1a = self.w1a.to(orig_weight.device)
         w1b = self.w1b.to(orig_weight.device)
         w2a = self.w2a.to(orig_weight.device)
@@ -34,22 +64,25 @@ class NetworkModuleHada(network.NetworkModule):
 
         output_shape = [w1a.size(0), w1b.size(1)]
 
+        # Calculate first up-down component
         if self.t1 is not None:
             output_shape = [w1a.size(1), w1b.size(1)]
             t1 = self.t1.to(orig_weight.device)
             updown1 = lyco_helpers.make_weight_cp(t1, w1a, w1b)
-            output_shape += t1.shape[2:]
+            output_shape.extend(t1.shape[2:])
         else:
             if len(w1b.shape) == 4:
-                output_shape += w1b.shape[2:]
+                output_shape.extend(w1b.shape[2:])
             updown1 = lyco_helpers.rebuild_conventional(w1a, w1b, output_shape)
 
+        # Calculate second up-down component
         if self.t2 is not None:
             t2 = self.t2.to(orig_weight.device)
             updown2 = lyco_helpers.make_weight_cp(t2, w2a, w2b)
         else:
             updown2 = lyco_helpers.rebuild_conventional(w2a, w2b, output_shape)
 
+        # Combine components using Hadamard product
         updown = updown1 * updown2
 
         return self.finalize_updown(updown, orig_weight, output_shape)
