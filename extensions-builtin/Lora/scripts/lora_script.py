@@ -1,3 +1,4 @@
+from typing import Dict, List, Optional, Any
 import re
 
 import gradio as gr
@@ -12,11 +13,13 @@ import ui_extra_networks_lora
 from modules import script_callbacks, ui_extra_networks, extra_networks, shared
 
 
-def unload():
+def unload() -> None:
+    """Undo network patches when unloading."""
     networks.originals.undo()
 
 
-def before_ui():
+def before_ui() -> None:
+    """Initialize UI components and register networks before UI loads."""
     ui_extra_networks.register_page(ui_extra_networks_lora.ExtraNetworksPageLora())
 
     networks.extra_network_lora = extra_networks_lora.ExtraNetworkLora()
@@ -24,33 +27,74 @@ def before_ui():
     extra_networks.register_extra_network_alias(networks.extra_network_lora, "lyco")
 
 
+# Initialize network patches
 networks.originals = lora_patches.LoraPatches()
 
+# Register callback handlers
 script_callbacks.on_model_loaded(networks.assign_network_names_to_compvis_modules)
 script_callbacks.on_script_unloaded(unload)
 script_callbacks.on_before_ui(before_ui)
 script_callbacks.on_infotext_pasted(networks.infotext_pasted)
 
 
+# Update options templates with extra networks settings
 shared.options_templates.update(shared.options_section(('extra_networks', "Extra Networks"), {
-    "sd_lora": shared.OptionInfo("None", "Add network to prompt", gr.Dropdown, lambda: {"choices": ["None", *networks.available_networks]}, refresh=networks.list_available_networks),
-    "lora_preferred_name": shared.OptionInfo("Alias from file", "When adding to prompt, refer to Lora by", gr.Radio, {"choices": ["Alias from file", "Filename"]}),
+    "sd_lora": shared.OptionInfo(
+        "None",
+        "Add network to prompt",
+        gr.Dropdown,
+        lambda: {"choices": ["None", *(net for net in networks.available_networks)]},
+        refresh=networks.list_available_networks
+    ),
+    "lora_preferred_name": shared.OptionInfo(
+        "Alias from file",
+        "When adding to prompt, refer to Lora by",
+        gr.Radio,
+        {"choices": ["Alias from file", "Filename"]}
+    ),
     "lora_add_hashes_to_infotext": shared.OptionInfo(True, "Add Lora hashes to infotext"),
-    "lora_bundled_ti_to_infotext": shared.OptionInfo(True, "Add Lora name as TI hashes for bundled Textual Inversion").info('"Add Textual Inversion hashes to infotext" needs to be enabled'),
-    "lora_show_all": shared.OptionInfo(False, "Always show all networks on the Lora page").info("otherwise, those detected as for incompatible version of Stable Diffusion will be hidden"),
-    "lora_hide_unknown_for_versions": shared.OptionInfo([], "Hide networks of unknown versions for model versions", gr.CheckboxGroup, {"choices": ["SD1", "SD2", "SDXL"]}),
-    "lora_in_memory_limit": shared.OptionInfo(0, "Number of Lora networks to keep cached in memory", gr.Number, {"precision": 0}),
+    "lora_bundled_ti_to_infotext": shared.OptionInfo(
+        True,
+        "Add Lora name as TI hashes for bundled Textual Inversion"
+    ).info('"Add Textual Inversion hashes to infotext" needs to be enabled'),
+    "lora_show_all": shared.OptionInfo(
+        False,
+        "Always show all networks on the Lora page"
+    ).info("otherwise, those detected as for incompatible version of Stable Diffusion will be hidden"),
+    "lora_hide_unknown_for_versions": shared.OptionInfo(
+        [],
+        "Hide networks of unknown versions for model versions",
+        gr.CheckboxGroup,
+        {"choices": ["SD1", "SD2", "SDXL"]}
+    ),
+    "lora_in_memory_limit": shared.OptionInfo(
+        0,
+        "Number of Lora networks to keep cached in memory",
+        gr.Number,
+        {"precision": 0}
+    ),
     "lora_not_found_warning_console": shared.OptionInfo(False, "Lora not found warning in console"),
     "lora_not_found_gradio_warning": shared.OptionInfo(False, "Lora not found warning popup in webui"),
 }))
 
-
+# Update compatibility options
 shared.options_templates.update(shared.options_section(('compatibility', "Compatibility"), {
-    "lora_functional": shared.OptionInfo(False, "Lora/Networks: use old method that takes longer when you have multiple Loras active and produces same results as kohya-ss/sd-webui-additional-networks extension"),
+    "lora_functional": shared.OptionInfo(
+        False,
+        "Lora/Networks: use old method that takes longer when you have multiple Loras active and produces same results as kohya-ss/sd-webui-additional-networks extension"
+    ),
 }))
 
 
-def create_lora_json(obj: network.NetworkOnDisk):
+def create_lora_json(obj: network.NetworkOnDisk) -> Dict[str, Any]:
+    """Create a JSON representation of a Lora network.
+
+    Args:
+        obj: The network object to convert
+
+    Returns:
+        Dict containing network information
+    """
     return {
         "name": obj.name,
         "alias": obj.alias,
@@ -59,30 +103,58 @@ def create_lora_json(obj: network.NetworkOnDisk):
     }
 
 
-def api_networks(_: gr.Blocks, app: FastAPI):
+def api_networks(_: gr.Blocks, app: FastAPI) -> None:
+    """Register API endpoints for Lora networks.
+
+    Args:
+        _: Unused Gradio blocks parameter
+        app: FastAPI application instance
+    """
     @app.get("/sdapi/v1/loras")
-    async def get_loras():
+    async def get_loras() -> List[Dict[str, Any]]:
         return [create_lora_json(obj) for obj in networks.available_networks.values()]
 
     @app.post("/sdapi/v1/refresh-loras")
-    async def refresh_loras():
+    async def refresh_loras() -> List[str]:
         return networks.list_available_networks()
 
 
 script_callbacks.on_app_started(api_networks)
 
-re_lora = re.compile("<lora:([^:]+):")
+# Compile regex pattern for better performance
+re_lora = re.compile(r"<lora:([^:]+):")
 
 
-def infotext_pasted(infotext, d):
+def infotext_pasted(infotext: str, d: Dict[str, Any]) -> None:
+    """Handle pasted infotext by processing Lora hashes.
+
+    Args:
+        infotext: The pasted infotext
+        d: Dictionary containing prompt information
+    """
     hashes = d.get("Lora hashes")
     if not hashes:
         return
 
-    hashes = [x.strip().split(':', 1) for x in hashes.split(",")]
-    hashes = {x[0].strip().replace(",", ""): x[1].strip() for x in hashes}
+    # Process hashes into a dictionary
+    hashes = dict(
+        x.strip().split(':', 1)
+        for x in hashes.split(",")
+    )
+    hashes = {
+        k.strip().replace(",", ""): v.strip()
+        for k, v in hashes.items()
+    }
 
-    def network_replacement(m):
+    def network_replacement(m: re.Match) -> str:
+        """Replace network references with their aliases.
+
+        Args:
+            m: Regex match object
+
+        Returns:
+            Replaced string
+        """
         alias = m.group(1)
         shorthash = hashes.get(alias)
         if shorthash is None:
@@ -94,9 +166,10 @@ def infotext_pasted(infotext, d):
 
         return f'<lora:{network_on_disk.get_alias()}:'
 
-    d["Prompt"] = re.sub(re_lora, network_replacement, d["Prompt"])
+    d["Prompt"] = re_lora.sub(network_replacement, d["Prompt"])
 
 
 script_callbacks.on_infotext_pasted(infotext_pasted)
 
+# Register memory limit change handler
 shared.opts.onchange("lora_in_memory_limit", networks.purge_networks_from_memory)
