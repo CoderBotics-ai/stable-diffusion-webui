@@ -1,7 +1,10 @@
 from __future__ import annotations
+from typing import Any, Optional
+from dataclasses import dataclass
 import os
 from collections import namedtuple
 import enum
+from typing import NamedTuple
 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,7 +12,12 @@ import torch.nn.functional as F
 from modules import sd_models, cache, errors, hashes, shared
 import modules.models.sd3.mmdit
 
-NetworkWeights = namedtuple('NetworkWeights', ['network_key', 'sd_key', 'w', 'sd_module'])
+
+class NetworkWeights(NamedTuple):
+    network_key: str
+    sd_key: str
+    w: Any
+    sd_module: Any
 
 metadata_tags_order = {"ss_sd_model_name": 1, "ss_resolution": 2, "ss_clip_skip": 3, "ss_num_train_images": 10, "ss_tag_frequency": 20}
 
@@ -20,18 +28,23 @@ class SdVersion(enum.Enum):
     SD2 = 3
     SDXL = 4
 
+    @property
+    def is_known(self) -> bool:
+        return self != SdVersion.Unknown
+
 
 class NetworkOnDisk:
-    def __init__(self, name, filename):
-        self.name = name
-        self.filename = filename
-        self.metadata = {}
-        self.is_safetensors = os.path.splitext(filename)[1].lower() == ".safetensors"
+    def __init__(self, name: str, filename: str) -> None:
+        self.name: str = name
+        self.filename: str = filename
+        self.metadata: dict[str, Any] = {}
+        self.is_safetensors: bool = os.path.splitext(filename)[1].lower() == ".safetensors"
+        self.hash: Optional[str] = None
+        self.shorthash: Optional[str] = None
+        self.alias: str = ""
 
-        def read_metadata():
-            metadata = sd_models.read_metadata_from_safetensors(filename)
-
-            return metadata
+        def read_metadata() -> dict[str, Any]:
+            return sd_models.read_metadata_from_safetensors(filename)
 
         if self.is_safetensors:
             try:
@@ -40,16 +53,15 @@ class NetworkOnDisk:
                 errors.display(e, f"reading lora {filename}")
 
         if self.metadata:
-            m = {}
-            for k, v in sorted(self.metadata.items(), key=lambda x: metadata_tags_order.get(x[0], 999)):
-                m[k] = v
-
-            self.metadata = m
+            self.metadata = {
+                k: v for k, v in sorted(
+                    self.metadata.items(),
+                    key=lambda x: metadata_tags_order.get(x[0], 999)
+                )
+            }
 
         self.alias = self.metadata.get('ss_output_name', self.name)
 
-        self.hash = None
-        self.shorthash = None
         self.set_hash(
             self.metadata.get('sshs_model_hash') or
             hashes.sha256_from_cache(self.filename, "lora/" + self.name, use_addnet_hash=self.is_safetensors) or
@@ -58,17 +70,16 @@ class NetworkOnDisk:
 
         self.sd_version = self.detect_version()
 
-    def detect_version(self):
+    def detect_version(self) -> SdVersion:
         if str(self.metadata.get('ss_base_model_version', "")).startswith("sdxl_"):
             return SdVersion.SDXL
         elif str(self.metadata.get('ss_v2', "")) == "True":
             return SdVersion.SD2
-        elif len(self.metadata):
+        elif self.metadata:
             return SdVersion.SD1
-
         return SdVersion.Unknown
 
-    def set_hash(self, v):
+    def set_hash(self, v: str) -> None:
         self.hash = v
         self.shorthash = self.hash[0:12]
 
@@ -76,43 +87,41 @@ class NetworkOnDisk:
             import networks
             networks.available_network_hash_lookup[self.shorthash] = self
 
-    def read_hash(self):
+    def read_hash(self) -> None:
         if not self.hash:
             self.set_hash(hashes.sha256(self.filename, "lora/" + self.name, use_addnet_hash=self.is_safetensors) or '')
 
-    def get_alias(self):
+    def get_alias(self) -> str:
         import networks
         if shared.opts.lora_preferred_name == "Filename" or self.alias.lower() in networks.forbidden_network_aliases:
             return self.name
-        else:
-            return self.alias
+        return self.alias
 
 
 class Network:  # LoraModule
-    def __init__(self, name, network_on_disk: NetworkOnDisk):
-        self.name = name
-        self.network_on_disk = network_on_disk
-        self.te_multiplier = 1.0
-        self.unet_multiplier = 1.0
-        self.dyn_dim = None
-        self.modules = {}
-        self.bundle_embeddings = {}
-        self.mtime = None
-
-        self.mentioned_name = None
+    def __init__(self, name: str, network_on_disk: NetworkOnDisk) -> None:
+        self.name: str = name
+        self.network_on_disk: NetworkOnDisk = network_on_disk
+        self.te_multiplier: float = 1.0
+        self.unet_multiplier: float = 1.0
+        self.dyn_dim: Optional[int] = None
+        self.modules: dict[str, Any] = {}
+        self.bundle_embeddings: dict[str, Any] = {}
+        self.mtime: Optional[float] = None
+        self.mentioned_name: Optional[str] = None
         """the text that was used to add the network to prompt - can be either name or an alias"""
 
 
 class ModuleType:
-    def create_module(self, net: Network, weights: NetworkWeights) -> Network | None:
+    def create_module(self, net: Network, weights: NetworkWeights) -> Optional[Network]:
         return None
 
 
 class NetworkModule:
-    def __init__(self, net: Network, weights: NetworkWeights):
-        self.network = net
-        self.network_key = weights.network_key
-        self.sd_key = weights.sd_key
+    def __init__(self, net: Network, weights: NetworkWeights) -> None:
+        self.network: Network = net
+        self.network_key: str = weights.network_key
+        self.sd_key: str = weights.sd_key
         self.sd_module = weights.sd_module
 
         if isinstance(self.sd_module, modules.models.sd3.mmdit.QkvLinear):
@@ -128,7 +137,7 @@ class NetworkModule:
             self.shape = None
 
         self.ops = None
-        self.extra_kwargs = {}
+        self.extra_kwargs: dict[str, Any] = {}
         if isinstance(self.sd_module, nn.Conv2d):
             self.ops = F.conv2d
             self.extra_kwargs = {
@@ -150,29 +159,27 @@ class NetworkModule:
                 'eps': self.sd_module.eps
             }
 
-        self.dim = None
+        self.dim: Optional[int] = None
         self.bias = weights.w.get("bias")
         self.alpha = weights.w["alpha"].item() if "alpha" in weights.w else None
         self.scale = weights.w["scale"].item() if "scale" in weights.w else None
 
         self.dora_scale = weights.w.get("dora_scale", None)
-        self.dora_norm_dims = len(self.shape) - 1
+        self.dora_norm_dims = len(self.shape) - 1 if self.shape else 0
 
-    def multiplier(self):
+    def multiplier(self) -> float:
         if 'transformer' in self.sd_key[:20]:
             return self.network.te_multiplier
-        else:
-            return self.network.unet_multiplier
+        return self.network.unet_multiplier
 
-    def calc_scale(self):
+    def calc_scale(self) -> float:
         if self.scale is not None:
             return self.scale
         if self.dim is not None and self.alpha is not None:
             return self.alpha / self.dim
-
         return 1.0
 
-    def apply_weight_decompose(self, updown, orig_weight):
+    def apply_weight_decompose(self, updown: torch.Tensor, orig_weight: torch.Tensor) -> torch.Tensor:
         # Match the device/dtype
         orig_weight = orig_weight.to(updown.dtype)
         dora_scale = self.dora_scale.to(device=orig_weight.device, dtype=updown.dtype)
@@ -187,13 +194,11 @@ class NetworkModule:
             .transpose(0, 1)
         )
 
-        dora_merged = (
-            merged_scale1 * (dora_scale / merged_scale1_norm)
-        )
-        final_updown = dora_merged - orig_weight
-        return final_updown
+        dora_merged = merged_scale1 * (dora_scale / merged_scale1_norm)
+        return dora_merged - orig_weight
 
-    def finalize_updown(self, updown, orig_weight, output_shape, ex_bias=None):
+    def finalize_updown(self, updown: torch.Tensor, orig_weight: torch.Tensor, 
+                       output_shape: tuple, ex_bias: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         if self.bias is not None:
             updown = updown.reshape(self.bias.shape)
             updown += self.bias.to(orig_weight.device, dtype=updown.dtype)
@@ -215,14 +220,13 @@ class NetworkModule:
 
         return updown * self.multiplier(), ex_bias
 
-    def calc_updown(self, target):
+    def calc_updown(self, target: torch.Tensor) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         raise NotImplementedError()
 
-    def forward(self, x, y):
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """A general forward implementation for all modules"""
         if self.ops is None:
             raise NotImplementedError()
-        else:
-            updown, ex_bias = self.calc_updown(self.sd_module.weight)
-            return y + self.ops(x, weight=updown, bias=ex_bias, **self.extra_kwargs)
-
+        
+        updown, ex_bias = self.calc_updown(self.sd_module.weight)
+        return y + self.ops(x, weight=updown, bias=ex_bias, **self.extra_kwargs)

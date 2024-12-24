@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import torch
+from typing import Optional, Dict, Any
 
 import lyco_helpers
 import modules.models.sd3.mmdit
@@ -7,56 +10,81 @@ from modules import devices
 
 
 class ModuleTypeLora(network.ModuleType):
-    def create_module(self, net: network.Network, weights: network.NetworkWeights):
+    def create_module(self, net: network.Network, weights: network.NetworkWeights) -> Optional[NetworkModuleLora]:
+        """Create a LoRA module based on the provided weights."""
         if all(x in weights.w for x in ["lora_up.weight", "lora_down.weight"]):
             return NetworkModuleLora(net, weights)
 
         if all(x in weights.w for x in ["lora_A.weight", "lora_B.weight"]):
             w = weights.w.copy()
             weights.w.clear()
-            weights.w.update({"lora_up.weight": w["lora_B.weight"], "lora_down.weight": w["lora_A.weight"]})
-
+            weights.w.update({
+                "lora_up.weight": w["lora_B.weight"],
+                "lora_down.weight": w["lora_A.weight"]
+            })
             return NetworkModuleLora(net, weights)
 
         return None
 
 
 class NetworkModuleLora(network.NetworkModule):
-    def __init__(self,  net: network.Network, weights: network.NetworkWeights):
+    def __init__(self, net: network.Network, weights: network.NetworkWeights) -> None:
         super().__init__(net, weights)
 
-        self.up_model = self.create_module(weights.w, "lora_up.weight")
-        self.down_model = self.create_module(weights.w, "lora_down.weight")
-        self.mid_model = self.create_module(weights.w, "lora_mid.weight", none_ok=True)
+        self.up_model: torch.nn.Module = self.create_module(weights.w, "lora_up.weight")
+        self.down_model: torch.nn.Module = self.create_module(weights.w, "lora_down.weight")
+        self.mid_model: Optional[torch.nn.Module] = self.create_module(weights.w, "lora_mid.weight", none_ok=True)
 
-        self.dim = weights.w["lora_down.weight"].shape[0]
+        self.dim: int = weights.w["lora_down.weight"].shape[0]
 
-    def create_module(self, weights, key, none_ok=False):
+    def create_module(self, weights: Dict[str, torch.Tensor], key: str, none_ok: bool = False) -> Optional[torch.nn.Module]:
         weight = weights.get(key)
 
         if weight is None and none_ok:
             return None
 
-        is_linear = type(self.sd_module) in [torch.nn.Linear, torch.nn.modules.linear.NonDynamicallyQuantizableLinear, torch.nn.MultiheadAttention, modules.models.sd3.mmdit.QkvLinear]
-        is_conv = type(self.sd_module) in [torch.nn.Conv2d]
+        module: torch.nn.Module
+        
+        match self.sd_module:
+            case torch.nn.Linear() | torch.nn.modules.linear.NonDynamicallyQuantizableLinear() | torch.nn.MultiheadAttention() | modules.models.sd3.mmdit.QkvLinear():
+                weight = weight.reshape(weight.shape[0], -1)
+                module = torch.nn.Linear(weight.shape[1], weight.shape[0], bias=False)
+            
+            case torch.nn.Conv2d():
+                if key in ["lora_down.weight", "dyn_up"]:
+                    if len(weight.shape) == 2:
+                        weight = weight.reshape(weight.shape[0], -1, 1, 1)
 
-        if is_linear:
-            weight = weight.reshape(weight.shape[0], -1)
-            module = torch.nn.Linear(weight.shape[1], weight.shape[0], bias=False)
-        elif is_conv and key == "lora_down.weight" or key == "dyn_up":
-            if len(weight.shape) == 2:
-                weight = weight.reshape(weight.shape[0], -1, 1, 1)
-
-            if weight.shape[2] != 1 or weight.shape[3] != 1:
-                module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], self.sd_module.kernel_size, self.sd_module.stride, self.sd_module.padding, bias=False)
-            else:
-                module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], (1, 1), bias=False)
-        elif is_conv and key == "lora_mid.weight":
-            module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], self.sd_module.kernel_size, self.sd_module.stride, self.sd_module.padding, bias=False)
-        elif is_conv and key == "lora_up.weight" or key == "dyn_down":
-            module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], (1, 1), bias=False)
-        else:
-            raise AssertionError(f'Lora layer {self.network_key} matched a layer with unsupported type: {type(self.sd_module).__name__}')
+                    if weight.shape[2] != 1 or weight.shape[3] != 1:
+                        module = torch.nn.Conv2d(
+                            weight.shape[1], 
+                            weight.shape[0], 
+                            self.sd_module.kernel_size, 
+                            self.sd_module.stride, 
+                            self.sd_module.padding, 
+                            bias=False
+                        )
+                    else:
+                        module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], (1, 1), bias=False)
+                
+                elif key == "lora_mid.weight":
+                    module = torch.nn.Conv2d(
+                        weight.shape[1], 
+                        weight.shape[0], 
+                        self.sd_module.kernel_size, 
+                        self.sd_module.stride, 
+                        self.sd_module.padding, 
+                        bias=False
+                    )
+                
+                elif key in ["lora_up.weight", "dyn_down"]:
+                    module = torch.nn.Conv2d(weight.shape[1], weight.shape[0], (1, 1), bias=False)
+                
+                else:
+                    raise ValueError(f"Unexpected key {key} for Conv2d module")
+            
+            case _:
+                raise TypeError(f'Lora layer {self.network_key} matched a layer with unsupported type: {type(self.sd_module).__name__}')
 
         with torch.no_grad():
             if weight.shape != module.weight.shape:
@@ -68,7 +96,7 @@ class NetworkModuleLora(network.NetworkModule):
 
         return module
 
-    def calc_updown(self, orig_weight):
+    def calc_updown(self, orig_weight: torch.Tensor) -> torch.Tensor:
         up = self.up_model.weight.to(orig_weight.device)
         down = self.down_model.weight.to(orig_weight.device)
 
@@ -85,10 +113,8 @@ class NetworkModuleLora(network.NetworkModule):
 
         return self.finalize_updown(updown, orig_weight, output_shape)
 
-    def forward(self, x, y):
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         self.up_model.to(device=devices.device)
         self.down_model.to(device=devices.device)
 
         return y + self.up_model(self.down_model(x)) * self.multiplier() * self.calc_scale()
-
-
