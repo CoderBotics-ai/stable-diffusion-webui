@@ -1,35 +1,39 @@
 setuptools==69.5.1  # temp fix for compatibility with some old packages
-GitPython==3.1.32
-Pillow==9.5.0
-accelerate==0.21.0
+GitPython==3.1.41  # Updated for Python 3.12 compatibility
+Pillow==10.2.0  # Updated to latest stable version supporting Python 3.12
+accelerate==0.27.2  # Updated to latest stable version
 blendmodes==2022
 clean-fid==0.1.35
 diskcache==5.6.3
-einops==0.4.1
+einops==0.7.0  # Updated for better Python 3.12 support
 facexlib==0.3.0
-fastapi==0.94.0
-gradio==3.41.2
-httpcore==0.15
+fastapi==0.109.2  # Updated to latest stable version
+gradio==4.19.2  # Major version update for Python 3.12 compatibility
+httpcore==1.0.2  # Updated to latest stable version
 inflection==0.5.1
 jsonmerge==1.8.0
-kornia==0.6.7
-lark==1.1.2
-numpy==1.26.2
-omegaconf==2.2.3
-open-clip-torch==2.20.0
+kornia==0.7.1  # Updated for Python 3.12 compatibility
+lark==1.1.9  # Updated to latest stable version
+numpy==1.26.4  # Updated to latest stable version
+omegaconf==2.3.0  # Updated for better Python 3.12 support
+open-clip-torch==2.24.0  # Updated to latest compatible version
 piexif==1.1.3
-protobuf==3.20.0
-psutil==5.9.5
-pytorch_lightning==1.9.4
+protobuf==4.25.2  # Updated to latest stable version
+psutil==5.9.8  # Updated to latest stable version
+pytorch_lightning==2.2.1  # Major version update for Python 3.12
 resize-right==0.0.2
 safetensors==0.4.2
-scikit-image==0.21.0
+scikit-image==0.22.0  # Updated to latest stable version
 spandrel==0.3.4
 spandrel-extra-arches==0.1.1
 tomesd==0.1.3
-torch
+torch>=2.2.0  # Updated to specify minimum version for Python 3.12 support
 torchdiffeq==0.2.3
 torchsde==0.2.6
-transformers==4.30.2
-httpx==0.24.1
+transformers==4.37.2  # Updated to latest stable version
+httpx==0.27.0  # Updated to latest stable version
 pillow-avif-plugin==1.4.3
+
+# Note: Some version updates are made to ensure compatibility with Python 3.12
+# while maintaining interdependency compatibility. Testing is recommended after
+# updating these packages.

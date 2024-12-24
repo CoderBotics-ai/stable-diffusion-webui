@@ -1,3 +1,4 @@
+from typing import NoReturn
 from modules import launch_utils
 
 args = launch_utils.args
@@ -24,12 +25,16 @@ configure_for_tests = launch_utils.configure_for_tests
 start = launch_utils.start
 
 
-def main():
+def main() -> NoReturn:
+    """
+    Main entry point for the application.
+    Handles environment preparation and server startup.
+    
+    Exits the program either after dumping system info or starting the server.
+    """
     if args.dump_sysinfo:
-        filename = launch_utils.dump_sysinfo()
-
+        filename: str = launch_utils.dump_sysinfo()
         print(f"Sysinfo saved as {filename}. Exiting...")
-
         exit(0)
 
     launch_utils.startup_timer.record("initial startup")

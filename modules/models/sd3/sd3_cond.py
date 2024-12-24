@@ -1,6 +1,8 @@
 import os
+from typing import Mapping, Any, Sequence
 import safetensors
 import torch
+from torch import Tensor
 import typing
 
 from transformers import CLIPTokenizer, T5TokenizerFast
@@ -9,23 +11,24 @@ from modules import shared, devices, modelloader, sd_hijack_clip, prompt_parser
 from modules.models.sd3.other_impls import SDClipModel, SDXLClipG, T5XXLModel, SD3Tokenizer
 
 
-class SafetensorsMapping(typing.Mapping):
-    def __init__(self, file):
+class SafetensorsMapping(Mapping[str, Tensor]):
+    """Mapping interface for safetensors file access."""
+    
+    def __init__(self, file: Any) -> None:
         self.file = file
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.file.keys())
 
-    def __iter__(self):
-        for key in self.file.keys():
-            yield key
+    def __iter__(self) -> typing.Iterator[str]:
+        yield from self.file.keys()
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Tensor:
         return self.file.get_tensor(key)
 
 
-CLIPL_URL = "https://huggingface.co/AUTOMATIC/stable-diffusion-3-medium-text-encoders/resolve/main/clip_l.safetensors"
-CLIPL_CONFIG = {
+CLIPL_URL: str = "https://huggingface.co/AUTOMATIC/stable-diffusion-3-medium-text-encoders/resolve/main/clip_l.safetensors"
+CLIPL_CONFIG: dict[str, Any] = {
     "hidden_act": "quick_gelu",
     "hidden_size": 768,
     "intermediate_size": 3072,
@@ -33,8 +36,8 @@ CLIPL_CONFIG = {
     "num_hidden_layers": 12,
 }
 
-CLIPG_URL = "https://huggingface.co/AUTOMATIC/stable-diffusion-3-medium-text-encoders/resolve/main/clip_g.safetensors"
-CLIPG_CONFIG = {
+CLIPG_URL: str = "https://huggingface.co/AUTOMATIC/stable-diffusion-3-medium-text-encoders/resolve/main/clip_g.safetensors"
+CLIPG_CONFIG: dict[str, Any] = {
     "hidden_act": "gelu",
     "hidden_size": 1280,
     "intermediate_size": 5120,
@@ -43,8 +46,8 @@ CLIPG_CONFIG = {
     "textual_inversion_key": "clip_g",
 }
 
-T5_URL = "https://huggingface.co/AUTOMATIC/stable-diffusion-3-medium-text-encoders/resolve/main/t5xxl_fp16.safetensors"
-T5_CONFIG = {
+T5_URL: str = "https://huggingface.co/AUTOMATIC/stable-diffusion-3-medium-text-encoders/resolve/main/t5xxl_fp16.safetensors"
+T5_CONFIG: dict[str, Any] = {
     "d_ff": 10240,
     "d_model": 4096,
     "num_heads": 64,
@@ -54,7 +57,7 @@ T5_CONFIG = {
 
 
 class Sd3ClipLG(sd_hijack_clip.TextConditionalModel):
-    def __init__(self, clip_l, clip_g):
+    def __init__(self, clip_l: SDClipModel, clip_g: SDXLClipG) -> None:
         super().__init__()
 
         self.clip_l = clip_l
@@ -69,10 +72,10 @@ class Sd3ClipLG(sd_hijack_clip.TextConditionalModel):
 
         self.return_pooled = True
 
-    def tokenize(self, texts):
+    def tokenize(self, texts: list[str]) -> list[int]:
         return self.tokenizer(texts, truncation=False, add_special_tokens=False)["input_ids"]
 
-    def encode_with_transformers(self, tokens):
+    def encode_with_transformers(self, tokens: Tensor) -> Tensor:
         tokens_g = tokens.clone()
 
         for batch_pos in range(tokens_g.shape[0]):
@@ -90,12 +93,12 @@ class Sd3ClipLG(sd_hijack_clip.TextConditionalModel):
         lg_out.pooled = vector_out
         return lg_out
 
-    def encode_embedding_init_text(self, init_text, nvpt):
-        return torch.zeros((nvpt, 768+1280), device=devices.device) # XXX
+    def encode_embedding_init_text(self, init_text: str, nvpt: int) -> Tensor:
+        return torch.zeros((nvpt, 768+1280), device=devices.device)
 
 
 class Sd3T5(torch.nn.Module):
-    def __init__(self, t5xxl):
+    def __init__(self, t5xxl: T5XXLModel | None) -> None:
         super().__init__()
 
         self.t5xxl = t5xxl
@@ -105,10 +108,10 @@ class Sd3T5(torch.nn.Module):
         self.id_end = empty[0]
         self.id_pad = empty[1]
 
-    def tokenize(self, texts):
+    def tokenize(self, texts: list[str]) -> list[int]:
         return self.tokenizer(texts, truncation=False, add_special_tokens=False)["input_ids"]
 
-    def tokenize_line(self, line, *, target_token_count=None):
+    def tokenize_line(self, line: str, *, target_token_count: int | None = None) -> tuple[list[int], list[float]]:
         if shared.opts.emphasis != "None":
             parsed = prompt_parser.parse_prompt_attention(line)
         else:
@@ -116,56 +119,64 @@ class Sd3T5(torch.nn.Module):
 
         tokenized = self.tokenize([text for text, _ in parsed])
 
-        tokens = []
-        multipliers = []
+        tokens: list[int] = []
+        multipliers: list[float] = []
 
         for text_tokens, (text, weight) in zip(tokenized, parsed):
             if text == 'BREAK' and weight == -1:
                 continue
 
-            tokens += text_tokens
-            multipliers += [weight] * len(text_tokens)
+            tokens.extend(text_tokens)
+            multipliers.extend([weight] * len(text_tokens))
 
-        tokens += [self.id_end]
-        multipliers += [1.0]
+        tokens.append(self.id_end)
+        multipliers.append(1.0)
 
         if target_token_count is not None:
             if len(tokens) < target_token_count:
-                tokens += [self.id_pad] * (target_token_count - len(tokens))
-                multipliers += [1.0] * (target_token_count - len(tokens))
+                tokens.extend([self.id_pad] * (target_token_count - len(tokens)))
+                multipliers.extend([1.0] * (target_token_count - len(multipliers)))
             else:
                 tokens = tokens[0:target_token_count]
                 multipliers = multipliers[0:target_token_count]
 
         return tokens, multipliers
 
-    def forward(self, texts, *, token_count):
+    def forward(self, texts: list[str], *, token_count: int) -> Tensor:
         if not self.t5xxl or not shared.opts.sd3_enable_t5:
             return torch.zeros((len(texts), token_count, 4096), device=devices.device, dtype=devices.dtype)
 
         tokens_batch = []
 
         for text in texts:
-            tokens, multipliers = self.tokenize_line(text, target_token_count=token_count)
+            tokens, _ = self.tokenize_line(text, target_token_count=token_count)
             tokens_batch.append(tokens)
 
-        t5_out, t5_pooled = self.t5xxl(tokens_batch)
+        t5_out, _ = self.t5xxl(tokens_batch)
 
         return t5_out
 
-    def encode_embedding_init_text(self, init_text, nvpt):
-        return torch.zeros((nvpt, 4096), device=devices.device) # XXX
+    def encode_embedding_init_text(self, init_text: str, nvpt: int) -> Tensor:
+        return torch.zeros((nvpt, 4096), device=devices.device)
 
 
 class SD3Cond(torch.nn.Module):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
         self.tokenizer = SD3Tokenizer()
 
         with torch.no_grad():
             self.clip_g = SDXLClipG(CLIPG_CONFIG, device="cpu", dtype=devices.dtype)
-            self.clip_l = SDClipModel(layer="hidden", layer_idx=-2, device="cpu", dtype=devices.dtype, layer_norm_hidden_state=False, return_projected_pooled=False, textmodel_json_config=CLIPL_CONFIG)
+            self.clip_l = SDClipModel(
+                layer="hidden",
+                layer_idx=-2,
+                device="cpu",
+                dtype=devices.dtype,
+                layer_norm_hidden_state=False,
+                return_projected_pooled=False,
+                textmodel_json_config=CLIPL_CONFIG
+            )
 
             if shared.opts.sd3_enable_t5:
                 self.t5xxl = T5XXLModel(T5_CONFIG, device="cpu", dtype=devices.dtype)
@@ -175,7 +186,7 @@ class SD3Cond(torch.nn.Module):
             self.model_lg = Sd3ClipLG(self.clip_l, self.clip_g)
             self.model_t5 = Sd3T5(self.t5xxl)
 
-    def forward(self, prompts: list[str]):
+    def forward(self, prompts: Sequence[str]) -> dict[str, Tensor]:
         with devices.without_autocast():
             lg_out, vector_out = self.model_lg(prompts)
             t5_out = self.model_t5(prompts, token_count=lg_out.shape[1])
@@ -186,7 +197,7 @@ class SD3Cond(torch.nn.Module):
             'vector': vector_out,
         }
 
-    def before_load_weights(self, state_dict):
+    def before_load_weights(self, state_dict: dict[str, Any]) -> None:
         clip_path = os.path.join(shared.models_path, "CLIP")
 
         if 'text_encoders.clip_g.transformer.text_model.embeddings.position_embedding.weight' not in state_dict:
@@ -204,19 +215,18 @@ class SD3Cond(torch.nn.Module):
             with safetensors.safe_open(t5_file, framework="pt") as file:
                 self.t5xxl.transformer.load_state_dict(SafetensorsMapping(file), strict=False)
 
-    def encode_embedding_init_text(self, init_text, nvpt):
+    def encode_embedding_init_text(self, init_text: str, nvpt: int) -> Tensor:
         return self.model_lg.encode_embedding_init_text(init_text, nvpt)
 
-    def tokenize(self, texts):
+    def tokenize(self, texts: list[str]) -> list[int]:
         return self.model_lg.tokenize(texts)
 
-    def medvram_modules(self):
+    def medvram_modules(self) -> list[Any]:
         return [self.clip_g, self.clip_l, self.t5xxl]
 
-    def get_token_count(self, text):
+    def get_token_count(self, text: str) -> int:
         _, token_count = self.model_lg.process_texts([text])
-
         return token_count
 
-    def get_target_prompt_token_count(self, token_count):
+    def get_target_prompt_token_count(self, token_count: int) -> int:
         return self.model_lg.get_target_prompt_token_count(token_count)

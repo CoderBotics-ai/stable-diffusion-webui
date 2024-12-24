@@ -1,24 +1,39 @@
-import modules.scripts as scripts
-import gradio as gr
+from __future__ import annotations
+
 import ast
 import copy
+from types import ModuleType
+from typing import Any, Optional, Union
 
+import gradio as gr
+
+import modules.scripts as scripts
 from modules.processing import Processed
 from modules.shared import cmd_opts
 
 
-def convertExpr2Expression(expr):
+def convert_expr_to_expression(expr: ast.Expr) -> ast.Expression:
+    """Convert an ast.Expr node to ast.Expression with proper positioning."""
     expr.lineno = 0
     expr.col_offset = 0
-    result = ast.Expression(expr.value, lineno=0, col_offset = 0)
-
+    result = ast.Expression(
+        body=expr.value,
+        lineno=0,
+        col_offset=0
+    )
     return result
 
 
-def exec_with_return(code, module):
+def exec_with_return(code: str, module: ModuleType) -> Any:
     """
-    like exec() but can return values
-    https://stackoverflow.com/a/52361938/5862977
+    Execute code and return its value if the last statement is an expression.
+    
+    Args:
+        code: The Python code to execute
+        module: The module context for execution
+    
+    Returns:
+        The result of the last expression if applicable
     """
     code_ast = ast.parse(code)
 
@@ -29,21 +44,27 @@ def exec_with_return(code, module):
     last_ast.body = code_ast.body[-1:]
 
     exec(compile(init_ast, "<ast>", "exec"), module.__dict__)
-    if type(last_ast.body[0]) == ast.Expr:
-        return eval(compile(convertExpr2Expression(last_ast.body[0]), "<ast>", "eval"), module.__dict__)
-    else:
-        exec(compile(last_ast, "<ast>", "exec"), module.__dict__)
+    
+    match last_ast.body[0]:
+        case ast.Expr():
+            return eval(
+                compile(convert_expr_to_expression(last_ast.body[0]), "<ast>", "eval"),
+                module.__dict__
+            )
+        case _:
+            exec(compile(last_ast, "<ast>", "exec"), module.__dict__)
 
 
 class Script(scripts.Script):
+    """Script class for handling custom code execution in the UI."""
 
-    def title(self):
+    def title(self) -> str:
         return "Custom code"
 
-    def show(self, is_img2img):
+    def show(self, is_img2img: bool) -> bool:
         return cmd_opts.allow_code
 
-    def ui(self, is_img2img):
+    def ui(self, is_img2img: bool) -> list[Union[gr.Code, gr.Number]]:
         example = """from modules.processing import process_images
 
 p.width = 768
@@ -54,23 +75,43 @@ p.steps = 10
 return process_images(p)
 """
 
-
-        code = gr.Code(value=example, language="python", label="Python code", elem_id=self.elem_id("code"))
-        indent_level = gr.Number(label='Indent level', value=2, precision=0, elem_id=self.elem_id("indent_level"))
+        code = gr.Code(
+            value=example,
+            language="python",
+            label="Python code",
+            elem_id=self.elem_id("code")
+        )
+        
+        indent_level = gr.Number(
+            label='Indent level',
+            value=2,
+            precision=0,
+            elem_id=self.elem_id("indent_level")
+        )
 
         return [code, indent_level]
 
-    def run(self, p, code, indent_level):
+    def run(self, p: Any, code: str, indent_level: int) -> Processed:
+        """
+        Execute custom code and return processed results.
+        
+        Args:
+            p: Processing parameters
+            code: Python code to execute
+            indent_level: Indentation level for code formatting
+            
+        Returns:
+            Processed result object
+        """
         assert cmd_opts.allow_code, '--allow-code option must be enabled'
 
-        display_result_data = [[], -1, ""]
+        display_result_data: list[Any] = [[], -1, ""]
 
-        def display(imgs, s=display_result_data[1], i=display_result_data[2]):
+        def display(imgs: list, s: int = display_result_data[1], i: str = display_result_data[2]) -> None:
             display_result_data[0] = imgs
             display_result_data[1] = s
             display_result_data[2] = i
 
-        from types import ModuleType
         module = ModuleType("testmodule")
         module.__dict__.update(globals())
         module.p = p
