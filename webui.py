@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any, Literal
 
 from modules import timer
 from modules import initialize_util
@@ -15,7 +16,7 @@ initialize.imports()
 initialize.check_versions()
 
 
-def create_api(app):
+def create_api(app: Any) -> Any:
     from modules.api.api import Api
     from modules.call_queue import queue_lock
 
@@ -23,7 +24,7 @@ def create_api(app):
     return api
 
 
-def api_only():
+def api_only() -> None:
     from fastapi import FastAPI
     from modules.shared_cmd_options import cmd_opts
 
@@ -37,7 +38,7 @@ def api_only():
     script_callbacks.before_ui_callback()
     script_callbacks.app_started_callback(None, app)
 
-    print(f"Startup time: {startup_timer.summary()}.")
+    print(f"Startup time: {startup_timer.summary()}")
     api.launch(
         server_name=initialize_util.gradio_server_name(),
         port=cmd_opts.port if cmd_opts.port else 7861,
@@ -45,7 +46,7 @@ def api_only():
     )
 
 
-def webui():
+def webui() -> None:
     from modules.shared_cmd_options import cmd_opts
 
     launch_api = cmd_opts.api
@@ -53,7 +54,7 @@ def webui():
 
     from modules import shared, ui_tempdir, script_callbacks, ui, progress, ui_extra_networks
 
-    while 1:
+    while True:
         if shared.opts.clean_temp_dir_at_start:
             ui_tempdir.cleanup_tmpdr()
             startup_timer.record("cleanup temp dir")
@@ -71,10 +72,13 @@ def webui():
 
         auto_launch_browser = False
         if os.getenv('SD_WEBUI_RESTARTING') != '1':
-            if shared.opts.auto_launch_browser == "Remote" or cmd_opts.autolaunch:
-                auto_launch_browser = True
-            elif shared.opts.auto_launch_browser == "Local":
-                auto_launch_browser = not cmd_opts.webui_is_non_local
+            match shared.opts.auto_launch_browser:
+                case "Remote" if cmd_opts.autolaunch:
+                    auto_launch_browser = True
+                case "Local" if not cmd_opts.webui_is_non_local:
+                    auto_launch_browser = True
+                case _:
+                    auto_launch_browser = False
 
         app, local_url, share_url = shared.demo.launch(
             share=cmd_opts.share,
@@ -119,38 +123,39 @@ def webui():
             script_callbacks.app_started_callback(shared.demo, app)
 
         timer.startup_record = startup_timer.dump()
-        print(f"Startup time: {startup_timer.summary()}.")
+        print(f"Startup time: {startup_timer.summary()}")
 
         try:
             while True:
-                server_command = shared.state.wait_for_server_command(timeout=5)
+                server_command: str | None = shared.state.wait_for_server_command(timeout=5)
                 if server_command:
-                    if server_command in ("stop", "restart"):
-                        break
-                    else:
-                        print(f"Unknown server command: {server_command}")
+                    match server_command:
+                        case "stop" | "restart":
+                            break
+                        case _:
+                            print(f"Unknown server command: {server_command}")
         except KeyboardInterrupt:
             print('Caught KeyboardInterrupt, stopping...')
             server_command = "stop"
 
-        if server_command == "stop":
-            print("Stopping server...")
-            # If we catch a keyboard interrupt, we want to stop the server and exit.
-            shared.demo.close()
-            break
+        match server_command:
+            case "stop":
+                print("Stopping server...")
+                shared.demo.close()
+                break
+            case _:
+                # disable auto launch webui in browser for subsequent UI Reload
+                os.environ.setdefault('SD_WEBUI_RESTARTING', '1')
 
-        # disable auto launch webui in browser for subsequent UI Reload
-        os.environ.setdefault('SD_WEBUI_RESTARTING', '1')
-
-        print('Restarting UI...')
-        shared.demo.close()
-        time.sleep(0.5)
-        startup_timer.reset()
-        script_callbacks.app_reload_callback()
-        startup_timer.record("app reload callback")
-        script_callbacks.script_unloaded_callback()
-        startup_timer.record("scripts unloaded callback")
-        initialize.initialize_rest(reload_script_modules=True)
+                print('Restarting UI...')
+                shared.demo.close()
+                time.sleep(0.5)
+                startup_timer.reset()
+                script_callbacks.app_reload_callback()
+                startup_timer.record("app reload callback")
+                script_callbacks.script_unloaded_callback()
+                startup_timer.record("scripts unloaded callback")
+                initialize.initialize_rest(reload_script_modules=True)
 
 
 if __name__ == "__main__":

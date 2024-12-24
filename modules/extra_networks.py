@@ -1,55 +1,76 @@
+from __future__ import annotations
+
 import json
 import os
 import re
 import logging
 from collections import defaultdict
+from typing import Dict, List, Optional, Any, Pattern
+from dataclasses import dataclass
 
 from modules import errors
 
-extra_network_registry = {}
-extra_network_aliases = {}
+# Type aliases
+ExtraNetworkRegistry = Dict[str, 'ExtraNetwork']
+ExtraNetworkAliases = Dict[str, 'ExtraNetwork']
+
+extra_network_registry: ExtraNetworkRegistry = {}
+extra_network_aliases: ExtraNetworkAliases = {}
+
+# Compile regex pattern once for better performance
+re_extra_net: Pattern[str] = re.compile(r"<(\w+):([^>]+)>")
 
 
-def initialize():
+def initialize() -> None:
     extra_network_registry.clear()
     extra_network_aliases.clear()
 
 
-def register_extra_network(extra_network):
+def register_extra_network(extra_network: ExtraNetwork) -> None:
     extra_network_registry[extra_network.name] = extra_network
 
 
-def register_extra_network_alias(extra_network, alias):
+def register_extra_network_alias(extra_network: ExtraNetwork, alias: str) -> None:
     extra_network_aliases[alias] = extra_network
 
 
-def register_default_extra_networks():
+def register_default_extra_networks() -> None:
     from modules.extra_networks_hypernet import ExtraNetworkHypernet
     register_extra_network(ExtraNetworkHypernet())
 
 
+@dataclass
 class ExtraNetworkParams:
-    def __init__(self, items=None):
+    items: List[Any]
+    positional: List[Any]
+    named: Dict[str, str]
+
+    def __init__(self, items: Optional[List[Any]] = None):
         self.items = items or []
         self.positional = []
         self.named = {}
 
         for item in self.items:
-            parts = item.split('=', 2) if isinstance(item, str) else [item]
-            if len(parts) == 2:
-                self.named[parts[0]] = parts[1]
+            if isinstance(item, str):
+                parts = item.split('=', 2)
+                if len(parts) == 2:
+                    self.named[parts[0]] = parts[1]
+                else:
+                    self.positional.append(item)
             else:
                 self.positional.append(item)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ExtraNetworkParams):
+            return NotImplemented
         return self.items == other.items
 
 
 class ExtraNetwork:
-    def __init__(self, name):
+    def __init__(self, name: str):
         self.name = name
 
-    def activate(self, p, params_list):
+    def activate(self, p: Any, params_list: List[ExtraNetworkParams]) -> None:
         """
         Called by processing on every run. Whatever the extra network is meant to do should be activated here.
         Passes arguments related to this extra network in params_list.
@@ -64,52 +85,23 @@ class ExtraNetwork:
         in this case, all effects of this extra networks should be disabled.
 
         Can be called multiple times before deactivate() - each new call should override the previous call completely.
-
-        For example, if this ExtraNetwork's name is 'hypernet' and user's prompt is:
-
-        > "1girl, <hypernet:agm:1.1> <extrasupernet:master:12:13:14> <hypernet:ray>"
-
-        params_list will be:
-
-        [
-            ExtraNetworkParams(items=["agm", "1.1"]),
-            ExtraNetworkParams(items=["ray"])
-        ]
-
         """
         raise NotImplementedError
 
-    def deactivate(self, p):
+    def deactivate(self, p: Any) -> None:
         """
         Called at the end of processing for housekeeping. No need to do anything here.
         """
-
         raise NotImplementedError
 
 
-def lookup_extra_networks(extra_network_data):
-    """returns a dict mapping ExtraNetwork objects to lists of arguments for those extra networks.
+def lookup_extra_networks(extra_network_data: Dict[str, List[ExtraNetworkParams]]) -> Dict[ExtraNetwork, List[ExtraNetworkParams]]:
+    """Returns a dict mapping ExtraNetwork objects to lists of arguments for those extra networks."""
+    res: Dict[ExtraNetwork, List[ExtraNetworkParams]] = {}
 
-    Example input:
-    {
-        'lora': [<modules.extra_networks.ExtraNetworkParams object at 0x0000020690D58310>],
-        'lyco': [<modules.extra_networks.ExtraNetworkParams object at 0x0000020690D58F70>],
-        'hypernet': [<modules.extra_networks.ExtraNetworkParams object at 0x0000020690D5A800>]
-    }
-
-    Example output:
-
-    {
-        <extra_networks_lora.ExtraNetworkLora object at 0x0000020581BEECE0>: [<modules.extra_networks.ExtraNetworkParams object at 0x0000020690D58310>, <modules.extra_networks.ExtraNetworkParams object at 0x0000020690D58F70>],
-        <modules.extra_networks_hypernet.ExtraNetworkHypernet object at 0x0000020581BEEE60>: [<modules.extra_networks.ExtraNetworkParams object at 0x0000020690D5A800>]
-    }
-    """
-
-    res = {}
-
-    for extra_network_name, extra_network_args in list(extra_network_data.items()):
-        extra_network = extra_network_registry.get(extra_network_name, None)
-        alias = extra_network_aliases.get(extra_network_name, None)
+    for extra_network_name, extra_network_args in extra_network_data.items():
+        extra_network = extra_network_registry.get(extra_network_name)
+        alias = extra_network_aliases.get(extra_network_name)
 
         if alias is not None and extra_network is None:
             extra_network = alias
@@ -123,14 +115,12 @@ def lookup_extra_networks(extra_network_data):
     return res
 
 
-def activate(p, extra_network_data):
-    """call activate for extra networks in extra_network_data in specified order, then call
+def activate(p: Any, extra_network_data: Dict[str, List[ExtraNetworkParams]]) -> None:
+    """Call activate for extra networks in extra_network_data in specified order, then call
     activate for all remaining registered networks with an empty argument list"""
-
-    activated = []
+    activated: List[ExtraNetwork] = []
 
     for extra_network, extra_network_args in lookup_extra_networks(extra_network_data).items():
-
         try:
             extra_network.activate(p, extra_network_args)
             activated.append(extra_network)
@@ -147,13 +137,14 @@ def activate(p, extra_network_data):
             errors.display(e, f"activating extra network {extra_network_name}")
 
     if p.scripts is not None:
-        p.scripts.after_extra_networks_activate(p, batch_number=p.iteration, prompts=p.prompts, seeds=p.seeds, subseeds=p.subseeds, extra_network_data=extra_network_data)
+        p.scripts.after_extra_networks_activate(p, batch_number=p.iteration, prompts=p.prompts, 
+                                             seeds=p.seeds, subseeds=p.subseeds, 
+                                             extra_network_data=extra_network_data)
 
 
-def deactivate(p, extra_network_data):
-    """call deactivate for extra networks in extra_network_data in specified order, then call
+def deactivate(p: Any, extra_network_data: Dict[str, List[ExtraNetworkParams]]) -> None:
+    """Call deactivate for extra networks in extra_network_data in specified order, then call
     deactivate for all remaining registered networks"""
-
     data = lookup_extra_networks(extra_network_data)
 
     for extra_network in data:
@@ -172,48 +163,40 @@ def deactivate(p, extra_network_data):
             errors.display(e, f"deactivating unmentioned extra network {extra_network_name}")
 
 
-re_extra_net = re.compile(r"<(\w+):([^>]+)>")
+def parse_prompt(prompt: str) -> tuple[str, defaultdict[str, List[ExtraNetworkParams]]]:
+    res: defaultdict[str, List[ExtraNetworkParams]] = defaultdict(list)
 
-
-def parse_prompt(prompt):
-    res = defaultdict(list)
-
-    def found(m):
+    def found(m: re.Match[str]) -> str:
         name = m.group(1)
         args = m.group(2)
-
         res[name].append(ExtraNetworkParams(items=args.split(":")))
-
         return ""
 
     prompt = re.sub(re_extra_net, found, prompt)
-
     return prompt, res
 
 
-def parse_prompts(prompts):
-    res = []
-    extra_data = None
+def parse_prompts(prompts: List[str]) -> tuple[List[str], Optional[defaultdict[str, List[ExtraNetworkParams]]]]:
+    res: List[str] = []
+    extra_data: Optional[defaultdict[str, List[ExtraNetworkParams]]] = None
 
     for prompt in prompts:
         updated_prompt, parsed_extra_data = parse_prompt(prompt)
-
         if extra_data is None:
             extra_data = parsed_extra_data
-
         res.append(updated_prompt)
 
     return res, extra_data
 
 
-def get_user_metadata(filename, lister=None):
+def get_user_metadata(filename: Optional[str], lister: Optional[Any] = None) -> Dict[str, Any]:
     if filename is None:
         return {}
 
     basename, ext = os.path.splitext(filename)
     metadata_filename = basename + '.json'
 
-    metadata = {}
+    metadata: Dict[str, Any] = {}
     try:
         exists = lister.exists(metadata_filename) if lister else os.path.exists(metadata_filename)
         if exists:
