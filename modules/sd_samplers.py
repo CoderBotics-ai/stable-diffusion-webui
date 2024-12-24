@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import logging
+from typing import Any, Optional
 from modules import sd_samplers_kdiffusion, sd_samplers_timesteps, sd_samplers_lcm, shared, sd_samplers_common, sd_schedulers
 
 # imports for functions that previously were here and are used by other modules
@@ -13,15 +14,15 @@ all_samplers = [
     *sd_samplers_timesteps.samplers_data_timesteps,
     *sd_samplers_lcm.samplers_data_lcm,
 ]
-all_samplers_map = {x.name: x for x in all_samplers}
+all_samplers_map: dict[str, sd_samplers_common.SamplerData] = {x.name: x for x in all_samplers}
 
 samplers: list[sd_samplers_common.SamplerData] = []
 samplers_for_img2img: list[sd_samplers_common.SamplerData] = []
-samplers_map = {}
-samplers_hidden = {}
+samplers_map: dict[str, str] = {}
+samplers_hidden: set[str] = set()
 
 
-def find_sampler_config(name):
+def find_sampler_config(name: str | None) -> Optional[sd_samplers_common.SamplerData]:
     if name is not None:
         config = all_samplers_map.get(name, None)
     else:
@@ -30,7 +31,7 @@ def find_sampler_config(name):
     return config
 
 
-def create_sampler(name, model):
+def create_sampler(name: str | None, model: Any) -> Any:
     config = find_sampler_config(name)
 
     assert config is not None, f'bad sampler name: {name}'
@@ -44,7 +45,7 @@ def create_sampler(name, model):
     return sampler
 
 
-def set_samplers():
+def set_samplers() -> None:
     global samplers, samplers_for_img2img, samplers_hidden
 
     samplers_hidden = set(shared.opts.hide_samplers)
@@ -58,23 +59,23 @@ def set_samplers():
             samplers_map[alias.lower()] = sampler.name
 
 
-def visible_sampler_names():
+def visible_sampler_names() -> list[str]:
     return [x.name for x in samplers if x.name not in samplers_hidden]
 
 
-def visible_samplers():
+def visible_samplers() -> list[sd_samplers_common.SamplerData]:
     return [x for x in samplers if x.name not in samplers_hidden]
 
 
-def get_sampler_from_infotext(d: dict):
+def get_sampler_from_infotext(d: dict[str, Any]) -> str:
     return get_sampler_and_scheduler(d.get("Sampler"), d.get("Schedule type"))[0]
 
 
-def get_scheduler_from_infotext(d: dict):
+def get_scheduler_from_infotext(d: dict[str, Any]) -> str:
     return get_sampler_and_scheduler(d.get("Sampler"), d.get("Schedule type"))[1]
 
 
-def get_hr_sampler_and_scheduler(d: dict):
+def get_hr_sampler_and_scheduler(d: dict[str, Any]) -> tuple[str, str]:
     hr_sampler = d.get("Hires sampler", "Use same sampler")
     sampler = d.get("Sampler") if hr_sampler == "Use same sampler" else hr_sampler
 
@@ -89,16 +90,21 @@ def get_hr_sampler_and_scheduler(d: dict):
     return sampler, scheduler
 
 
-def get_hr_sampler_from_infotext(d: dict):
+def get_hr_sampler_from_infotext(d: dict[str, Any]) -> str:
     return get_hr_sampler_and_scheduler(d)[0]
 
 
-def get_hr_scheduler_from_infotext(d: dict):
+def get_hr_scheduler_from_infotext(d: dict[str, Any]) -> str:
     return get_hr_sampler_and_scheduler(d)[1]
 
 
 @functools.cache
-def get_sampler_and_scheduler(sampler_name, scheduler_name, *, convert_automatic=True):
+def get_sampler_and_scheduler(
+    sampler_name: str | None, 
+    scheduler_name: str | None, 
+    *, 
+    convert_automatic: bool = True
+) -> tuple[str, str]:
     default_sampler = samplers[0]
     found_scheduler = sd_schedulers.schedulers_map.get(scheduler_name, sd_schedulers.schedulers[0])
 
@@ -122,7 +128,7 @@ def get_sampler_and_scheduler(sampler_name, scheduler_name, *, convert_automatic
     return sampler.name, found_scheduler.label
 
 
-def fix_p_invalid_sampler_and_scheduler(p):
+def fix_p_invalid_sampler_and_scheduler(p: Any) -> None:
     i_sampler_name, i_scheduler = p.sampler_name, p.scheduler
     p.sampler_name, p.scheduler = get_sampler_and_scheduler(p.sampler_name, p.scheduler, convert_automatic=False)
     if p.sampler_name != i_sampler_name or i_scheduler != p.scheduler:

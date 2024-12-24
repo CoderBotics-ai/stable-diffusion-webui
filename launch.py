@@ -1,3 +1,4 @@
+from typing import NoReturn
 from modules import launch_utils
 
 args = launch_utils.args
@@ -24,24 +25,33 @@ configure_for_tests = launch_utils.configure_for_tests
 start = launch_utils.start
 
 
-def main():
-    if args.dump_sysinfo:
-        filename = launch_utils.dump_sysinfo()
+def main() -> NoReturn:
+    """
+    Main entry point for the launcher application.
+    Handles environment preparation and server startup.
+    
+    Exits with code 0 if system info dump is requested.
+    """
+    try:
+        if args.dump_sysinfo:
+            filename = launch_utils.dump_sysinfo()
+            print(f"Sysinfo saved as {filename}. Exiting...")
+            exit(0)
 
-        print(f"Sysinfo saved as {filename}. Exiting...")
+        launch_utils.startup_timer.record("initial startup")
 
-        exit(0)
+        with launch_utils.startup_timer.subcategory("prepare environment"):
+            if not args.skip_prepare_environment:
+                prepare_environment()
 
-    launch_utils.startup_timer.record("initial startup")
+        if args.test_server:
+            configure_for_tests()
 
-    with launch_utils.startup_timer.subcategory("prepare environment"):
-        if not args.skip_prepare_environment:
-            prepare_environment()
-
-    if args.test_server:
-        configure_for_tests()
-
-    start()
+        start()
+        
+    except Exception as e:
+        print(f"Error during startup: {e}")
+        raise
 
 
 if __name__ == "__main__":

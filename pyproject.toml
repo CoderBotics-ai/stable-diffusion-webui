@@ -1,6 +1,6 @@
 [tool.ruff]
 
-target-version = "py39"
+target-version = "py312"  # Updated to Python 3.12
 
 [tool.ruff.lint]
 

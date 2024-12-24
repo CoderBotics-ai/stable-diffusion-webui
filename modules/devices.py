@@ -1,6 +1,7 @@
 import sys
 import contextlib
 from functools import lru_cache
+from typing import Optional, Union, Tuple, Any
 
 import torch
 from modules import errors, shared, npu_specific
@@ -17,13 +18,14 @@ def has_xpu() -> bool:
 
 
 def has_mps() -> bool:
-    if sys.platform != "darwin":
-        return False
-    else:
-        return mac_specific.has_mps
+    match sys.platform:
+        case "darwin":
+            return mac_specific.has_mps
+        case _:
+            return False
 
 
-def cuda_no_autocast(device_id=None) -> bool:
+def cuda_no_autocast(device_id: Optional[int] = None) -> bool:
     if device_id is None:
         device_id = get_cuda_device_id()
     return (
@@ -32,7 +34,7 @@ def cuda_no_autocast(device_id=None) -> bool:
     )
 
 
-def get_cuda_device_id():
+def get_cuda_device_id() -> int:
     return (
         int(shared.cmd_opts.device_id)
         if shared.cmd_opts.device_id is not None and shared.cmd_opts.device_id.isdigit()
@@ -40,14 +42,13 @@ def get_cuda_device_id():
     ) or torch.cuda.current_device()
 
 
-def get_cuda_device_string():
+def get_cuda_device_string() -> str:
     if shared.cmd_opts.device_id is not None:
         return f"cuda:{shared.cmd_opts.device_id}"
-
     return "cuda"
 
 
-def get_optimal_device_name():
+def get_optimal_device_name() -> str:
     if torch.cuda.is_available():
         return get_cuda_device_string()
 
@@ -63,19 +64,17 @@ def get_optimal_device_name():
     return "cpu"
 
 
-def get_optimal_device():
+def get_optimal_device() -> torch.device:
     return torch.device(get_optimal_device_name())
 
 
-def get_device_for(task):
+def get_device_for(task: str) -> torch.device:
     if task in shared.cmd_opts.use_cpu or "all" in shared.cmd_opts.use_cpu:
         return cpu
-
     return get_optimal_device()
 
 
-def torch_gc():
-
+def torch_gc() -> None:
     if torch.cuda.is_available():
         with torch.cuda.device(get_cuda_device_string()):
             torch.cuda.empty_cache()
@@ -92,15 +91,14 @@ def torch_gc():
         npu_specific.torch_npu_gc()
 
 
-def torch_npu_set_device():
+def torch_npu_set_device() -> None:
     # Work around due to bug in torch_npu, revert me after fixed, @see https://gitee.com/ascend/pytorch/issues/I8KECW?from=project-issue
     if npu_specific.has_npu:
         torch.npu.set_device(0)
 
 
-def enable_tf32():
+def enable_tf32() -> None:
     if torch.cuda.is_available():
-
         # enabling benchmark option seems to enable a range of cards to do fp16 when they otherwise can't
         # see https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/4407
         if cuda_no_autocast():
@@ -117,25 +115,25 @@ fp8: bool = False
 # Force fp16 for all models in inference. No casting during inference.
 # This flag is controlled by "--precision half" command line arg.
 force_fp16: bool = False
-device: torch.device = None
-device_interrogate: torch.device = None
-device_gfpgan: torch.device = None
-device_esrgan: torch.device = None
-device_codeformer: torch.device = None
+device: Optional[torch.device] = None
+device_interrogate: Optional[torch.device] = None
+device_gfpgan: Optional[torch.device] = None
+device_esrgan: Optional[torch.device] = None
+device_codeformer: Optional[torch.device] = None
 dtype: torch.dtype = torch.float16
 dtype_vae: torch.dtype = torch.float16
 dtype_unet: torch.dtype = torch.float16
 dtype_inference: torch.dtype = torch.float16
-unet_needs_upcast = False
+unet_needs_upcast: bool = False
 
 
-def cond_cast_unet(input):
+def cond_cast_unet(input: torch.Tensor) -> torch.Tensor:
     if force_fp16:
         return input.to(torch.float16)
     return input.to(dtype_unet) if unet_needs_upcast else input
 
 
-def cond_cast_float(input):
+def cond_cast_float(input: torch.Tensor) -> torch.Tensor:
     return input.float() if unet_needs_upcast else input
 
 
@@ -149,8 +147,8 @@ patch_module_list = [
 ]
 
 
-def manual_cast_forward(target_dtype):
-    def forward_wrapper(self, *args, **kwargs):
+def manual_cast_forward(target_dtype: torch.dtype):
+    def forward_wrapper(self, *args: Any, **kwargs: Any) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
         if any(
             isinstance(arg, torch.Tensor) and arg.dtype != target_dtype
             for arg in args
@@ -185,7 +183,7 @@ def manual_cast_forward(target_dtype):
 
 
 @contextlib.contextmanager
-def manual_cast(target_dtype):
+def manual_cast(target_dtype: torch.dtype):
     applied = False
     for module_type in patch_module_list:
         if hasattr(module_type, "org_forward"):
@@ -207,7 +205,7 @@ def manual_cast(target_dtype):
                     delattr(module_type, "org_forward")
 
 
-def autocast(disable=False):
+def autocast(disable: bool = False) -> contextlib.AbstractContextManager:
     if disable:
         return contextlib.nullcontext()
 
@@ -216,7 +214,7 @@ def autocast(disable=False):
         # All tensor dtype conversion happens before inference.
         return contextlib.nullcontext()
 
-    if fp8 and device==cpu:
+    if fp8 and device == cpu:
         return torch.autocast("cpu", dtype=torch.bfloat16, enabled=True)
 
     if fp8 and dtype_inference == torch.float32:
@@ -231,7 +229,7 @@ def autocast(disable=False):
     return torch.autocast("cuda")
 
 
-def without_autocast(disable=False):
+def without_autocast(disable: bool = False) -> contextlib.AbstractContextManager:
     return torch.autocast("cuda", enabled=False) if torch.is_autocast_enabled() and not disable else contextlib.nullcontext()
 
 
@@ -239,39 +237,35 @@ class NansException(Exception):
     pass
 
 
-def test_for_nans(x, where):
+def test_for_nans(x: torch.Tensor, where: str) -> None:
     if shared.cmd_opts.disable_nan_check:
         return
 
-    if not torch.isnan(x[(0, ) * len(x.shape)]):
+    if not torch.isnan(x[(0,) * len(x.shape)]):
         return
 
-    if where == "unet":
-        message = "A tensor with NaNs was produced in Unet."
-
-        if not shared.cmd_opts.no_half:
-            message += " This could be either because there's not enough precision to represent the picture, or because your video card does not support half type. Try setting the \"Upcast cross attention layer to float32\" option in Settings > Stable Diffusion or using the --no-half commandline argument to fix this."
-
-    elif where == "vae":
-        message = "A tensor with NaNs was produced in VAE."
-
-        if not shared.cmd_opts.no_half and not shared.cmd_opts.no_half_vae:
-            message += " This could be because there's not enough precision to represent the picture. Try adding --no-half-vae commandline argument to fix this."
-    else:
-        message = "A tensor with NaNs was produced."
+    match where:
+        case "unet":
+            message = "A tensor with NaNs was produced in Unet."
+            if not shared.cmd_opts.no_half:
+                message += " This could be either because there's not enough precision to represent the picture, or because your video card does not support half type. Try setting the \"Upcast cross attention layer to float32\" option in Settings > Stable Diffusion or using the --no-half commandline argument to fix this."
+        case "vae":
+            message = "A tensor with NaNs was produced in VAE."
+            if not shared.cmd_opts.no_half and not shared.cmd_opts.no_half_vae:
+                message += " This could be because there's not enough precision to represent the picture. Try adding --no-half-vae commandline argument to fix this."
+        case _:
+            message = "A tensor with NaNs was produced."
 
     message += " Use --disable-nan-check commandline argument to disable this check."
-
     raise NansException(message)
 
 
 @lru_cache
-def first_time_calculation():
+def first_time_calculation() -> None:
     """
     just do any calculation with pytorch layers - the first time this is done it allocates about 700MB of memory and
     spends about 2.7 seconds doing that, at least with NVidia.
     """
-
     x = torch.zeros((1, 1)).to(device, dtype)
     linear = torch.nn.Linear(1, 1).to(device, dtype)
     linear(x)
@@ -281,7 +275,7 @@ def first_time_calculation():
     conv2d(x)
 
 
-def force_model_fp16():
+def force_model_fp16() -> None:
     """
     ldm and sgm has modules.diffusionmodules.util.GroupNorm32.forward, which
     force conversion of input to float32. If force_fp16 is enabled, we need to
