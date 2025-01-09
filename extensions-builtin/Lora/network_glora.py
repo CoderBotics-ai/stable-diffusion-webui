@@ -1,4 +1,3 @@
-
 import network
 
 class ModuleTypeGLora(network.ModuleType):

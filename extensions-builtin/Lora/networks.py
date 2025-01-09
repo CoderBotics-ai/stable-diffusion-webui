@@ -3,6 +3,8 @@ import gradio as gr
 import logging
 import os
 import re
+from typing import Union, Optional
+from typing_extensions import override
 
 import lora_patches
 import network
@@ -16,7 +18,6 @@ import network_norm
 import network_oft
 
 import torch
-from typing import Union
 
 from modules import shared, devices, sd_models, errors, scripts, sd_hijack
 import modules.textual_inversion.textual_inversion as textual_inversion
@@ -35,7 +36,6 @@ module_types = [
     network_oft.ModuleTypeOFT(),
 ]
 
-
 re_digits = re.compile(r"\d+")
 re_x_proj = re.compile(r"(.*)_([qkv]_proj)$")
 re_compiled = {}
@@ -52,9 +52,8 @@ suffix_conversion = {
     }
 }
 
-
-def convert_diffusers_name_to_compvis(key, is_sd2):
-    def match(match_list, regex_text):
+def convert_diffusers_name_to_compvis(key: str, is_sd2: bool) -> str:
+    def match(match_list: list, regex_text: str) -> bool:
         regex = re_compiled.get(regex_text)
         if regex is None:
             regex = re.compile(regex_text)
@@ -68,7 +67,7 @@ def convert_diffusers_name_to_compvis(key, is_sd2):
         match_list.extend([int(x) if re.match(re_digits, x) else x for x in r.groups()])
         return True
 
-    m = []
+    m: list[Union[int, str]] = []
 
     if match(m, r"lora_unet_conv_in(.*)"):
         return f'diffusion_model_input_blocks_0_0{m[0]}'
@@ -118,8 +117,7 @@ def convert_diffusers_name_to_compvis(key, is_sd2):
 
     return key
 
-
-def assign_network_names_to_compvis_modules(sd_model):
+def assign_network_names_to_compvis_modules(sd_model) -> None:
     network_layer_mapping = {}
 
     if shared.sd_model.is_sdxl:
@@ -146,22 +144,19 @@ def assign_network_names_to_compvis_modules(sd_model):
 
     sd_model.network_layer_mapping = network_layer_mapping
 
-
 class BundledTIHash(str):
-    def __init__(self, hash_str):
+    def __init__(self, hash_str: str):
         self.hash = hash_str
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.hash if shared.opts.lora_bundled_ti_to_infotext else ''
 
-
-def load_network(name, network_on_disk):
+def load_network(name: str, network_on_disk) -> network.Network:
     net = network.Network(name, network_on_disk)
     net.mtime = os.path.getmtime(network_on_disk.filename)
 
     sd = sd_models.read_state_dict(network_on_disk.filename)
 
-    # this should not be needed but is here as an emergency fix for an unknown error people are experiencing in 1.2.0
     if not hasattr(shared.sd_model, 'network_layer_mapping'):
         assign_network_names_to_compvis_modules(shared.sd_model)
 
@@ -181,7 +176,6 @@ def load_network(name, network_on_disk):
     bundle_embeddings = {}
 
     for key_network, weight in sd.items():
-
         if diffusers_weight_map:
             key_network_without_network_parts, network_name, network_weight = key_network.rsplit(".", 2)
             network_part = network_name + '.' + network_weight
@@ -210,7 +204,6 @@ def load_network(name, network_on_disk):
             if m:
                 sd_module = shared.sd_model.network_layer_mapping.get(m.group(1), None)
 
-        # SDXL loras seem to already have correct compvis keys, so only need to replace "lora_unet" with "diffusion_model"
         if sd_module is None and "lora_unet" in key_network_without_network_parts:
             key = key_network_without_network_parts.replace("lora_unet", "diffusion_model")
             sd_module = shared.sd_model.network_layer_mapping.get(key, None)
@@ -218,17 +211,14 @@ def load_network(name, network_on_disk):
             key = key_network_without_network_parts.replace("lora_te1_text_model", "0_transformer_text_model")
             sd_module = shared.sd_model.network_layer_mapping.get(key, None)
 
-            # some SD1 Loras also have correct compvis keys
             if sd_module is None:
                 key = key_network_without_network_parts.replace("lora_te1_text_model", "transformer_text_model")
                 sd_module = shared.sd_model.network_layer_mapping.get(key, None)
 
-        # kohya_ss OFT module
         elif sd_module is None and "oft_unet" in key_network_without_network_parts:
             key = key_network_without_network_parts.replace("oft_unet", "diffusion_model")
             sd_module = shared.sd_model.network_layer_mapping.get(key, None)
 
-        # KohakuBlueLeaf OFT module
         if sd_module is None and "oft_diag" in key:
             key = key_network_without_network_parts.replace("lora_unet", "diffusion_model")
             key = key_network_without_network_parts.replace("lora_te1_text_model", "0_transformer_text_model")
@@ -269,16 +259,14 @@ def load_network(name, network_on_disk):
 
     return net
 
-
-def purge_networks_from_memory():
+def purge_networks_from_memory() -> None:
     while len(networks_in_memory) > shared.opts.lora_in_memory_limit and len(networks_in_memory) > 0:
         name = next(iter(networks_in_memory))
         networks_in_memory.pop(name, None)
 
     devices.torch_gc()
 
-
-def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=None):
+def load_networks(names: list[str], te_multipliers: Optional[list[float]] = None, unet_multipliers: Optional[list[float]] = None, dyn_dims: Optional[list[float]] = None) -> None:
     emb_db = sd_hijack.model_hijack.embedding_db
     already_loaded = {}
 
@@ -365,30 +353,26 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
 
     purge_networks_from_memory()
 
-
-def allowed_layer_without_weight(layer):
+def allowed_layer_without_weight(layer) -> bool:
     if isinstance(layer, torch.nn.LayerNorm) and not layer.elementwise_affine:
         return True
 
     return False
 
-
-def store_weights_backup(weight):
+def store_weights_backup(weight) -> Optional[torch.Tensor]:
     if weight is None:
         return None
 
     return weight.to(devices.cpu, copy=True)
 
-
-def restore_weights_backup(obj, field, weight):
+def restore_weights_backup(obj, field: str, weight) -> None:
     if weight is None:
         setattr(obj, field, None)
         return
 
     getattr(obj, field).copy_(weight)
 
-
-def network_restore_weights_from_backup(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]):
+def network_restore_weights_from_backup(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]) -> None:
     weights_backup = getattr(self, "network_weights_backup", None)
     bias_backup = getattr(self, "network_bias_backup", None)
 
@@ -407,14 +391,7 @@ def network_restore_weights_from_backup(self: Union[torch.nn.Conv2d, torch.nn.Li
     else:
         restore_weights_backup(self, 'bias', bias_backup)
 
-
-def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]):
-    """
-    Applies the currently selected set of networks to the weights of torch layer self.
-    If weights already have this particular set of networks applied, does nothing.
-    If not, restores original weights from backup and alters weights according to networks.
-    """
-
+def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]) -> None:
     network_layer_name = getattr(self, 'network_layer_name', None)
     if network_layer_name is None:
         return
@@ -443,8 +420,6 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
         else:
             bias_backup = None
 
-        # Unlike weight which always has value, some modules don't have bias.
-        # Only report if bias is not None and current bias are not unchanged.
         if bias_backup is not None and current_names != ():
             raise RuntimeError("no backup bias found and current bias are not unchanged")
 
@@ -469,7 +444,6 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
                         updown, ex_bias = module.calc_updown(weight)
 
                         if len(weight.shape) == 4 and weight.shape[1] == 9:
-                            # inpainting model. zero pad updown to make channel[1]  4 to 9
                             updown = torch.nn.functional.pad(updown, (0, 0, 0, 0, 0, 5))
 
                         self.weight.copy_((weight.to(dtype=updown.dtype) + updown).to(dtype=self.weight.dtype))
@@ -492,7 +466,6 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
             if isinstance(self, torch.nn.MultiheadAttention) and module_q and module_k and module_v and module_out:
                 try:
                     with torch.no_grad():
-                        # Send "real" orig_weight into MHA's lora module
                         qw, kw, vw = self.in_proj_weight.chunk(3, 0)
                         updown_q, _ = module_q.calc_updown(qw)
                         updown_k, _ = module_k.calc_updown(kw)
@@ -518,7 +491,6 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
             if isinstance(self, modules.models.sd3.mmdit.QkvLinear) and module_q and module_k and module_v:
                 try:
                     with torch.no_grad():
-                        # Send "real" orig_weight into MHA's lora module
                         qw, kw, vw = self.weight.chunk(3, 0)
                         updown_q, _ = module_q.calc_updown(qw)
                         updown_k, _ = module_k.calc_updown(kw)
@@ -541,13 +513,7 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
 
         self.network_current_names = wanted_names
 
-
 def network_forward(org_module, input, original_forward):
-    """
-    Old way of applying Lora by executing operations during layer's forward.
-    Stacking many loras this way results in big performance degradation.
-    """
-
     if len(loaded_networks) == 0:
         return original_forward(org_module, input)
 
@@ -568,12 +534,10 @@ def network_forward(org_module, input, original_forward):
 
     return y
 
-
-def network_reset_cached_weight(self: Union[torch.nn.Conv2d, torch.nn.Linear]):
+def network_reset_cached_weight(self: Union[torch.nn.Conv2d, torch.nn.Linear]) -> None:
     self.network_current_names = ()
     self.network_weights_backup = None
     self.network_bias_backup = None
-
 
 def network_Linear_forward(self, input):
     if shared.opts.lora_functional:
@@ -583,12 +547,10 @@ def network_Linear_forward(self, input):
 
     return originals.Linear_forward(self, input)
 
-
 def network_Linear_load_state_dict(self, *args, **kwargs):
     network_reset_cached_weight(self)
 
     return originals.Linear_load_state_dict(self, *args, **kwargs)
-
 
 def network_Conv2d_forward(self, input):
     if shared.opts.lora_functional:
@@ -598,12 +560,10 @@ def network_Conv2d_forward(self, input):
 
     return originals.Conv2d_forward(self, input)
 
-
 def network_Conv2d_load_state_dict(self, *args, **kwargs):
     network_reset_cached_weight(self)
 
     return originals.Conv2d_load_state_dict(self, *args, **kwargs)
-
 
 def network_GroupNorm_forward(self, input):
     if shared.opts.lora_functional:
@@ -613,12 +573,10 @@ def network_GroupNorm_forward(self, input):
 
     return originals.GroupNorm_forward(self, input)
 
-
 def network_GroupNorm_load_state_dict(self, *args, **kwargs):
     network_reset_cached_weight(self)
 
     return originals.GroupNorm_load_state_dict(self, *args, **kwargs)
-
 
 def network_LayerNorm_forward(self, input):
     if shared.opts.lora_functional:
@@ -628,38 +586,33 @@ def network_LayerNorm_forward(self, input):
 
     return originals.LayerNorm_forward(self, input)
 
-
 def network_LayerNorm_load_state_dict(self, *args, **kwargs):
     network_reset_cached_weight(self)
 
     return originals.LayerNorm_load_state_dict(self, *args, **kwargs)
-
 
 def network_MultiheadAttention_forward(self, *args, **kwargs):
     network_apply_weights(self)
 
     return originals.MultiheadAttention_forward(self, *args, **kwargs)
 
-
 def network_MultiheadAttention_load_state_dict(self, *args, **kwargs):
     network_reset_cached_weight(self)
 
     return originals.MultiheadAttention_load_state_dict(self, *args, **kwargs)
 
-
-def process_network_files(names: list[str] | None = None):
+def process_network_files(names: Optional[list[str]] = None) -> None:
     candidates = list(shared.walk_files(shared.cmd_opts.lora_dir, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
     candidates += list(shared.walk_files(shared.cmd_opts.lyco_dir_backcompat, allowed_extensions=[".pt", ".ckpt", ".safetensors"]))
     for filename in candidates:
         if os.path.isdir(filename):
             continue
         name = os.path.splitext(os.path.basename(filename))[0]
-        # if names is provided, only load networks with names in the list
         if names and name not in names:
             continue
         try:
             entry = network.NetworkOnDisk(name, filename)
-        except OSError:  # should catch FileNotFoundError and PermissionError etc.
+        except OSError:
             errors.report(f"Failed to load network {name} from {filename}", exc_info=True)
             continue
 
@@ -671,12 +624,10 @@ def process_network_files(names: list[str] | None = None):
         available_network_aliases[name] = entry
         available_network_aliases[entry.alias] = entry
 
-
-def update_available_networks_by_names(names: list[str]):
+def update_available_networks_by_names(names: list[str]) -> None:
     process_network_files(names)
 
-
-def list_available_networks():
+def list_available_networks() -> None:
     available_networks.clear()
     available_network_aliases.clear()
     forbidden_network_aliases.clear()
@@ -687,13 +638,11 @@ def list_available_networks():
 
     process_network_files()
 
-
 re_network_name = re.compile(r"(.*)\s*\([0-9a-fA-F]+\)")
 
-
-def infotext_pasted(infotext, params):
+def infotext_pasted(infotext: str, params: dict) -> None:
     if "AddNet Module 1" in [x[1] for x in scripts.scripts_txt2img.infotext_fields]:
-        return  # if the other extension is active, it will handle those fields, no need to do anything
+        return
 
     added = []
 
@@ -720,7 +669,6 @@ def infotext_pasted(infotext, params):
 
     if added:
         params["Prompt"] += "\n" + "".join(added)
-
 
 originals: lora_patches.LoraPatches = None
 

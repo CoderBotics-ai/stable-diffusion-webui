@@ -225,4 +225,3 @@ class NetworkModule:
         else:
             updown, ex_bias = self.calc_updown(self.sd_module.weight)
             return y + self.ops(x, weight=updown, bias=ex_bias, **self.extra_kwargs)
-

@@ -1,11 +1,12 @@
 import torch
+from typing import Optional, Tuple, Union
 
 import lyco_helpers
 import network
 
 
 class ModuleTypeLokr(network.ModuleType):
-    def create_module(self, net: network.Network, weights: network.NetworkWeights):
+    def create_module(self, net: network.Network, weights: network.NetworkWeights) -> Optional['NetworkModuleLokr']:
         has_1 = "lokr_w1" in weights.w or ("lokr_w1_a" in weights.w and "lokr_w1_b" in weights.w)
         has_2 = "lokr_w2" in weights.w or ("lokr_w2_a" in weights.w and "lokr_w2_b" in weights.w)
         if has_1 and has_2:
@@ -14,7 +15,7 @@ class ModuleTypeLokr(network.ModuleType):
         return None
 
 
-def make_kron(orig_shape, w1, w2):
+def make_kron(orig_shape: Tuple[int, ...], w1: torch.Tensor, w2: torch.Tensor) -> torch.Tensor:
     if len(w2.shape) == 4:
         w1 = w1.unsqueeze(2).unsqueeze(2)
     w2 = w2.contiguous()
@@ -22,20 +23,20 @@ def make_kron(orig_shape, w1, w2):
 
 
 class NetworkModuleLokr(network.NetworkModule):
-    def __init__(self,  net: network.Network, weights: network.NetworkWeights):
+    def __init__(self, net: network.Network, weights: network.NetworkWeights):
         super().__init__(net, weights)
 
-        self.w1 = weights.w.get("lokr_w1")
-        self.w1a = weights.w.get("lokr_w1_a")
-        self.w1b = weights.w.get("lokr_w1_b")
-        self.dim = self.w1b.shape[0] if self.w1b is not None else self.dim
-        self.w2 = weights.w.get("lokr_w2")
-        self.w2a = weights.w.get("lokr_w2_a")
-        self.w2b = weights.w.get("lokr_w2_b")
-        self.dim = self.w2b.shape[0] if self.w2b is not None else self.dim
-        self.t2 = weights.w.get("lokr_t2")
+        self.w1: Optional[torch.Tensor] = weights.w.get("lokr_w1")
+        self.w1a: Optional[torch.Tensor] = weights.w.get("lokr_w1_a")
+        self.w1b: Optional[torch.Tensor] = weights.w.get("lokr_w1_b")
+        self.dim: int = self.w1b.shape[0] if self.w1b is not None else self.dim
+        self.w2: Optional[torch.Tensor] = weights.w.get("lokr_w2")
+        self.w2a: Optional[torch.Tensor] = weights.w.get("lokr_w2_a")
+        self.w2b: Optional[torch.Tensor] = weights.w.get("lokr_w2_b")
+        self.dim: int = self.w2b.shape[0] if self.w2b is not None else self.dim
+        self.t2: Optional[torch.Tensor] = weights.w.get("lokr_t2")
 
-    def calc_updown(self, orig_weight):
+    def calc_updown(self, orig_weight: torch.Tensor) -> torch.Tensor:
         if self.w1 is not None:
             w1 = self.w1.to(orig_weight.device)
         else:
