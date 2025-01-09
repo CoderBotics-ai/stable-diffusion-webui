@@ -68,4 +68,3 @@ class ScriptPostprocessingSplitOversized(scripts_postprocessing.ScriptPostproces
 
         pp.image = result
         pp.extra_images = [pp.create_copy(x) for x in others]
-

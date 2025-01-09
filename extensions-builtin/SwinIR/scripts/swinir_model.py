@@ -1,5 +1,6 @@
 import logging
 import sys
+from typing import Optional, Tuple
 
 import torch
 from PIL import Image
@@ -13,21 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 class UpscalerSwinIR(Upscaler):
-    def __init__(self, dirname):
-        self._cached_model = None           # keep the model when SWIN_torch_compile is on to prevent re-compile every runs
-        self._cached_model_config = None    # to clear '_cached_model' when changing model (v1/v2) or settings
-        self.name = "SwinIR"
-        self.model_url = SWINIR_MODEL_URL
-        self.model_name = "SwinIR 4x"
-        self.user_path = dirname
+    def __init__(self, dirname: str) -> None:
+        self._cached_model: Optional[torch.nn.Module] = None  # keep the model when SWIN_torch_compile is on to prevent re-compile every runs
+        self._cached_model_config: Optional[Tuple[str, int]] = None  # to clear '_cached_model' when changing model (v1/v2) or settings
+        self.name: str = "SwinIR"
+        self.model_url: str = SWINIR_MODEL_URL
+        self.model_name: str = "SwinIR 4x"
+        self.user_path: str = dirname
         super().__init__()
-        scalers = []
+        scalers: list[UpscalerData] = []
         model_files = self.find_models(ext_filter=[".pt", ".pth"])
         for model in model_files:
-            if model.startswith("http"):
-                name = self.model_name
-            else:
-                name = modelloader.friendly_name(model)
+            name = self.model_name if model.startswith("http") else modelloader.friendly_name(model)
             model_data = UpscalerData(name, model, self)
             scalers.append(model_data)
         self.scalers = scalers
@@ -35,7 +33,7 @@ class UpscalerSwinIR(Upscaler):
     def do_upscale(self, img: Image.Image, model_file: str) -> Image.Image:
         current_config = (model_file, shared.opts.SWIN_tile)
 
-        if self._cached_model_config == current_config:
+        if self._cached_model_config == current_config and self._cached_model is not None:
             model = self._cached_model
         else:
             try:
@@ -57,15 +55,16 @@ class UpscalerSwinIR(Upscaler):
         devices.torch_gc()
         return img
 
-    def load_model(self, path, scale=4):
-        if path.startswith("http"):
-            filename = modelloader.load_file_from_url(
+    def load_model(self, path: str, scale: int = 4) -> torch.nn.Module:
+        filename = (
+            modelloader.load_file_from_url(
                 url=path,
                 model_dir=self.model_download_path,
                 file_name=f"{self.model_name.replace(' ', '_')}.pth",
             )
-        else:
-            filename = path
+            if path.startswith("http")
+            else path
+        )
 
         model_descriptor = modelloader.load_spandrel_model(
             filename,
@@ -76,20 +75,47 @@ class UpscalerSwinIR(Upscaler):
         if getattr(shared.opts, 'SWIN_torch_compile', False):
             try:
                 model_descriptor.model.compile()
-            except Exception:
-                logger.warning("Failed to compile SwinIR model, fallback to JIT", exc_info=True)
+            except Exception as e:
+                logger.warning("Failed to compile SwinIR model, fallback to JIT", exc_info=e)
         return model_descriptor
 
-    def _get_device(self):
+    def _get_device(self) -> torch.device:
         return devices.get_device_for('swinir')
 
 
-def on_ui_settings():
+def on_ui_settings() -> None:
     import gradio as gr
 
-    shared.opts.add_option("SWIN_tile", shared.OptionInfo(192, "Tile size for all SwinIR.", gr.Slider, {"minimum": 16, "maximum": 512, "step": 16}, section=('upscaling', "Upscaling")))
-    shared.opts.add_option("SWIN_tile_overlap", shared.OptionInfo(8, "Tile overlap, in pixels for SwinIR. Low values = visible seam.", gr.Slider, {"minimum": 0, "maximum": 48, "step": 1}, section=('upscaling', "Upscaling")))
-    shared.opts.add_option("SWIN_torch_compile", shared.OptionInfo(False, "Use torch.compile to accelerate SwinIR.", gr.Checkbox, {"interactive": True}, section=('upscaling', "Upscaling")).info("Takes longer on first run"))
+    shared.opts.add_option(
+        "SWIN_tile",
+        shared.OptionInfo(
+            192,
+            "Tile size for all SwinIR.",
+            gr.Slider,
+            {"minimum": 16, "maximum": 512, "step": 16},
+            section=('upscaling', "Upscaling")
+        )
+    )
+    shared.opts.add_option(
+        "SWIN_tile_overlap",
+        shared.OptionInfo(
+            8,
+            "Tile overlap, in pixels for SwinIR. Low values = visible seam.",
+            gr.Slider,
+            {"minimum": 0, "maximum": 48, "step": 1},
+            section=('upscaling', "Upscaling")
+        )
+    )
+    shared.opts.add_option(
+        "SWIN_torch_compile",
+        shared.OptionInfo(
+            False,
+            "Use torch.compile to accelerate SwinIR.",
+            gr.Checkbox,
+            {"interactive": True},
+            section=('upscaling', "Upscaling")
+        ).info("Takes longer on first run")
+    )
 
 
 script_callbacks.on_ui_settings(on_ui_settings)

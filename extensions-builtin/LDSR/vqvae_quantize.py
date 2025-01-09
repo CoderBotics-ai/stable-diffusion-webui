@@ -24,6 +24,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Optional, Union, Tuple
 from einops import rearrange
 
 
@@ -31,13 +32,20 @@ class VectorQuantizer2(nn.Module):
     """
     Improved version over VectorQuantizer, can be used as a drop-in replacement. Mostly
     avoids costly matrix multiplications and allows for post-hoc remapping of indices.
+
+    Args:
+        n_e (int): Number of embeddings
+        e_dim (int): Dimension of each embedding
+        beta (float): Commitment cost factor
+        remap (Optional[str]): Path to remapping file
+        unknown_index (Union[str, int]): How to handle unknown indices ("random", "extra", or integer)
+        sane_index_shape (bool): Whether to maintain sane index shapes
+        legacy (bool): Whether to use legacy beta application
     """
 
-    # NOTE: due to a bug the beta term was applied to the wrong term. for
-    # backwards compatibility we use the buggy version by default, but you can
-    # specify legacy=False to fix it.
-    def __init__(self, n_e, e_dim, beta, remap=None, unknown_index="random",
-                 sane_index_shape=False, legacy=True):
+    def __init__(self, n_e: int, e_dim: int, beta: float, remap: Optional[str] = None,
+                 unknown_index: Union[str, int] = "random", sane_index_shape: bool = False,
+                 legacy: bool = True):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
@@ -49,6 +57,8 @@ class VectorQuantizer2(nn.Module):
 
         self.remap = remap
         if self.remap is not None:
+            if not isinstance(self.remap, str):
+                raise TypeError(f"remap must be a string path, got {type(self.remap)}")
             self.register_buffer("used", torch.tensor(np.load(self.remap)))
             self.re_embed = self.used.shape[0]
             self.unknown_index = unknown_index  # "random" or "extra" or integer
@@ -62,7 +72,8 @@ class VectorQuantizer2(nn.Module):
 
         self.sane_index_shape = sane_index_shape
 
-    def remap_to_used(self, inds):
+    def remap_to_used(self, inds: torch.Tensor) -> torch.Tensor:
+        """Remap indices to used indices."""
         ishape = inds.shape
         assert len(ishape) > 1
         inds = inds.reshape(ishape[0], -1)
@@ -76,7 +87,8 @@ class VectorQuantizer2(nn.Module):
             new[unknown] = self.unknown_index
         return new.reshape(ishape)
 
-    def unmap_to_all(self, inds):
+    def unmap_to_all(self, inds: torch.Tensor) -> torch.Tensor:
+        """Unmap indices back to all indices."""
         ishape = inds.shape
         assert len(ishape) > 1
         inds = inds.reshape(ishape[0], -1)
@@ -86,18 +98,32 @@ class VectorQuantizer2(nn.Module):
         back = torch.gather(used[None, :][inds.shape[0] * [0], :], 1, inds)
         return back.reshape(ishape)
 
-    def forward(self, z, temp=None, rescale_logits=False, return_logits=False):
+    def forward(self, z: torch.Tensor, temp: Optional[float] = None,
+                rescale_logits: bool = False, return_logits: bool = False) -> Tuple[torch.Tensor, torch.Tensor, Tuple]:
+        """
+        Forward pass through the quantizer.
+
+        Args:
+            z: Input tensor
+            temp: Temperature parameter (unused, for interface compatibility)
+            rescale_logits: Whether to rescale logits (unused, for interface compatibility)
+            return_logits: Whether to return logits (unused, for interface compatibility)
+
+        Returns:
+            Tuple containing quantized tensor, loss, and additional information
+        """
         assert temp is None or temp == 1.0, "Only for interface compatible with Gumbel"
         assert rescale_logits is False, "Only for interface compatible with Gumbel"
         assert return_logits is False, "Only for interface compatible with Gumbel"
+        
         # reshape z -> (batch, height, width, channel) and flatten
         z = rearrange(z, 'b c h w -> b h w c').contiguous()
         z_flattened = z.view(-1, self.e_dim)
+        
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-
-        d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
-            torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+        d = (torch.sum(z_flattened ** 2, dim=1, keepdim=True) +
+             torch.sum(self.embedding.weight ** 2, dim=1) -
+             2 * torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n')))
 
         min_encoding_indices = torch.argmin(d, dim=1)
         z_q = self.embedding(min_encoding_indices).view(z.shape)
@@ -106,11 +132,11 @@ class VectorQuantizer2(nn.Module):
 
         # compute loss for embedding
         if not self.legacy:
-            loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                   torch.mean((z_q - z.detach()) ** 2)
+            loss = (self.beta * torch.mean((z_q.detach() - z) ** 2) +
+                    torch.mean((z_q - z.detach()) ** 2))
         else:
-            loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
-                   torch.mean((z_q - z.detach()) ** 2)
+            loss = (torch.mean((z_q.detach() - z) ** 2) +
+                    self.beta * torch.mean((z_q - z.detach()) ** 2))
 
         # preserve gradients
         z_q = z + (z_q - z).detach()
@@ -129,8 +155,17 @@ class VectorQuantizer2(nn.Module):
 
         return z_q, loss, (perplexity, min_encodings, min_encoding_indices)
 
-    def get_codebook_entry(self, indices, shape):
-        # shape specifying (batch, height, width, channel)
+    def get_codebook_entry(self, indices: torch.Tensor, shape: Optional[Tuple[int, int, int, int]]) -> torch.Tensor:
+        """
+        Get codebook entry for given indices.
+
+        Args:
+            indices: Tensor of indices
+            shape: Optional shape specifying (batch, height, width, channel)
+
+        Returns:
+            Quantized latent vectors
+        """
         if self.remap is not None:
             indices = indices.reshape(shape[0], -1)  # add batch axis
             indices = self.unmap_to_all(indices)
